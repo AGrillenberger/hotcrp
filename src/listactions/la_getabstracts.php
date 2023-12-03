@@ -9,7 +9,7 @@ class GetAbstracts_ListAction extends ListAction {
      * @param Contact $user
      * @param PaperOption $o */
     private static function render_abstract($fr, $prow, $user, $o) {
-        $fr->value = $prow->abstract_text();
+        $fr->value = $prow->abstract();
         $fr->value_format = $prow->abstract_format();
     }
     /** @param FieldRender $fr
@@ -19,7 +19,7 @@ class GetAbstracts_ListAction extends ListAction {
     private static function render_authors($fr, $prow, $user, $o) {
         if ($user->can_view_authors($prow)
             && ($alist = $prow->author_list())) {
-            $fr->title = $o->title(count($alist));
+            $fr->title = $o->title(new FmtArg("count", count($alist)));
             $fr->set_text("");
             foreach ($alist as $i => $au) {
                 $marker = ($i || count($alist) > 1 ? ($i + 1) . ". " : "");
@@ -33,7 +33,7 @@ class GetAbstracts_ListAction extends ListAction {
      * @param PaperOption $o */
     private static function render_topics($fr, $prow, $user, $o) {
         if (($tlist = $prow->topic_map())) {
-            $fr->title = $o->title(count($tlist));
+            $fr->title = $o->title(new FmtArg("count", count($tlist)));
             $fr->set_text("");
             foreach ($tlist as $t) {
                 $fr->value .= prefix_word_wrap("* ", $t, 2, self::WIDTH);
@@ -44,10 +44,10 @@ class GetAbstracts_ListAction extends ListAction {
         $n = prefix_word_wrap("", "Submission #{$prow->paperId}: {$prow->title}", 0, self::WIDTH);
         $text = $n . str_repeat("=", min(self::WIDTH, strlen($n) - 1)) . "\n\n";
 
-        $fr = new FieldRender(FieldRender::CTEXT, $user);
+        $fr = new FieldRender(FieldRender::CFTEXT, $user);
         foreach ($user->conf->options()->page_fields($prow) as $o) {
             if (($o->id <= 0 || $user->allow_view_option($prow, $o))
-                && $o->page_order() !== false) {
+                && $o->on_page()) {
                 $fr->clear();
                 if ($o->id === -1004) {
                     self::render_abstract($fr, $prow, $user, $o);
@@ -79,7 +79,7 @@ class GetAbstracts_ListAction extends ListAction {
         $ml = [];
         foreach ($ssel->paper_set($user, ["topics" => 1]) as $prow) {
             if (($whyNot = $user->perm_view_paper($prow))) {
-                $ml[] = MessageItem::error("<5>" . $whyNot->unparse_html());
+                array_push($ml, ...$whyNot->message_list(null, 2));
             } else {
                 $texts[] = $this->render($prow, $user);
                 $lastpid = $prow->paperId;

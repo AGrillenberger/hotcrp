@@ -67,12 +67,16 @@ CREATE TABLE `ContactCounter` (
 DROP TABLE IF EXISTS `ContactInfo`;
 CREATE TABLE `ContactInfo` (
   `contactId` int(11) NOT NULL AUTO_INCREMENT,
+  `email` varchar(120) NOT NULL,
   `firstName` varbinary(120) NOT NULL DEFAULT '',
   `lastName` varbinary(120) NOT NULL DEFAULT '',
   `unaccentedName` varbinary(2048) NOT NULL DEFAULT '',
-  `email` varchar(120) NOT NULL,
-  `preferredEmail` varchar(120) DEFAULT NULL,
   `affiliation` varbinary(2048) NOT NULL DEFAULT '',
+  `roles` tinyint(1) NOT NULL DEFAULT 0,
+  `disabled` tinyint(1) NOT NULL DEFAULT 0,
+  `primaryContactId` int(11) NOT NULL DEFAULT 0,
+  `contactTags` varbinary(4096) DEFAULT NULL,
+  `cflags` int(11) NOT NULL DEFAULT 0,
   `orcid` varbinary(64) DEFAULT NULL,
   `phone` varbinary(64) DEFAULT NULL,
   `country` varbinary(256) DEFAULT NULL,
@@ -80,15 +84,12 @@ CREATE TABLE `ContactInfo` (
   `passwordTime` bigint(11) NOT NULL DEFAULT 0,
   `passwordUseTime` bigint(11) NOT NULL DEFAULT 0,
   `collaborators` varbinary(8192) DEFAULT NULL,
+  `preferredEmail` varchar(120) DEFAULT NULL,
   `updateTime` bigint(11) NOT NULL DEFAULT 0,
   `lastLogin` bigint(11) NOT NULL DEFAULT 0,
   `defaultWatch` int(11) NOT NULL DEFAULT 2,
-  `roles` tinyint(1) NOT NULL DEFAULT 0,
   `cdbRoles` tinyint(1) NOT NULL DEFAULT 0,
-  `disabled` tinyint(1) NOT NULL DEFAULT 0,
-  `contactTags` varbinary(4096) DEFAULT NULL,
   `data` varbinary(32767) DEFAULT NULL,
-  `primaryContactId` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`contactId`),
   UNIQUE KEY `email` (`email`),
   KEY `roles` (`roles`)
@@ -247,7 +248,7 @@ CREATE TABLE `Paper` (
   `managerContactId` int(11) NOT NULL DEFAULT 0,
   `capVersion` int(1) NOT NULL DEFAULT 0,
   # next 3 fields copied from PaperStorage to reduce joins
-  `size` int(11) NOT NULL DEFAULT 0,
+  `size` bigint(11) NOT NULL DEFAULT -1,
   `mimetype` varbinary(80) NOT NULL DEFAULT '',
   `timestamp` bigint(11) NOT NULL DEFAULT 0,
   `pdfFormatStatus` bigint(11) NOT NULL DEFAULT 0,
@@ -470,10 +471,13 @@ CREATE TABLE `PaperStorage` (
   `documentType` int(3) NOT NULL DEFAULT 0,
   `filename` varbinary(255) DEFAULT NULL,
   `infoJson` varbinary(32768) DEFAULT NULL,
-  `size` bigint(11) DEFAULT NULL,
+  `size` bigint(11) NOT NULL DEFAULT -1,
   `filterType` int(3) DEFAULT NULL,
   `originalStorageId` int(11) DEFAULT NULL,
   `inactive` tinyint(1) NOT NULL DEFAULT 0,
+  `npages` int(3) NOT NULL DEFAULT -1,
+  `width` int(8) NOT NULL DEFAULT -1,
+  `height` int(8) NOT NULL DEFAULT -1,
   PRIMARY KEY (`paperId`,`paperStorageId`),
   UNIQUE KEY `paperStorageId` (`paperStorageId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -615,23 +619,20 @@ CREATE TABLE `TopicInterest` (
 
 
 
-insert into Settings (name, value) values ('allowPaperOption', 272);
-insert into Settings (name, value) values ('setupPhase', 1);
--- there are no submissions yet
-insert into Settings (name, value) values ('no_papersub', 1);
--- collect PC conflicts from authors by default, but not collaborators
-insert into Settings (name, value) values ('sub_pcconf', 1);
--- default chair-only tags
-insert into Settings (name, value, data) values ('tag_chair', 1, 'accept pcpaper reject');
--- default: allow PC members to review any paper
-insert into Settings (name, value) values ('pcrev_any', 1);
--- default: allow external reviewers to see the other reviews
-insert into Settings (name, value) values ('extrev_view', 2);
--- default: administrators must approve potentially-conflicted external reviews
-insert into Settings (name, value) values ('extrev_chairreq', 2);
--- `pcrev_soft` setting starts at explicit 0
-insert into Settings (name, value) values ('pcrev_soft', 0);
+-- Initial settings
+-- (each setting must be on its own line for createdb.sh)
+insert into Settings (name, value, data) values
+  ('allowPaperOption', 286, null),   -- schema version
+  ('setupPhase', 1, null),           -- initial user is chair
+  ('no_papersub', 1, null),          -- no submissions yet
+  ('sub_pcconf', 1, null),           -- collect PC conflicts, not collaborators
+  ('tag_chair', 1, 'accept pcpaper reject'),  -- default read-only tags
+  ('pcrev_any', 1, null),            -- PC members can review any paper
+  ('viewrevid', 1, null),            -- PC members can see anonymous reviewer IDs
+  ('extrev_chairreq', 2, null),      -- administrators must approve potentially-conflicted reviewers
+  ('pcrev_soft', 0, null);           -- soft review deadline is explicit 0
 
+-- matches DocumentInfo::make_empty()
 insert ignore into PaperStorage set
     paperStorageId=1, paperId=0, timestamp=0, mimetype='text/plain',
     paper='', sha1=x'da39a3ee5e6b4b0d3255bfef95601890afd80709',

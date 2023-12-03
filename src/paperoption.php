@@ -1,643 +1,6 @@
 <?php
 // paperoption.php -- HotCRP helper class for paper options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
-
-class PaperValue implements JsonSerializable {
-    /** @var PaperInfo
-     * @readonly */
-    public $prow;
-    /** @var int
-     * @readonly */
-    public $id;
-    /** @var PaperOption
-     * @readonly */
-    public $option;
-    /** @var ?int */
-    public $value;
-    /** @var ?array<string,mixed> */
-    private $_anno;
-    /** @var list<int> */
-    private $_values = [];
-    /** @var list<?string> */
-    private $_data = [];
-    /** @var ?DocumentInfoSet */
-    private $_docset;
-    /** @var ?MessageSet */
-    private $_ms;
-
-    const NEWDOC_VALUE = -142398;
-
-    /** @param PaperInfo $prow */
-    function __construct($prow, PaperOption $o) { // XXX should be private
-        $this->prow = $prow;
-        $this->id = $o->id;
-        $this->option = $o;
-    }
-    /** @param PaperInfo $prow
-     * @param ?int $value
-     * @param ?string $data
-     * @return PaperValue */
-    static function make($prow, PaperOption $o, $value = null, $data = null) {
-        $ov = new PaperValue($prow, $o);
-        if ($value !== null) {
-            $ov->set_value_data([$value], [$data]);
-        }
-        return $ov;
-    }
-    /** @param PaperInfo $prow
-     * @param list<int> $values
-     * @param list<?string> $datas
-     * @return PaperValue */
-    static function make_multi($prow, PaperOption $o, $values, $datas) {
-        $ov = new PaperValue($prow, $o);
-        $ov->set_value_data($values, $datas);
-        return $ov;
-    }
-    /** @param PaperInfo $prow
-     * @param string $msg
-     * @return PaperValue */
-    static function make_estop($prow, PaperOption $o, $msg) {
-        $ov = new PaperValue($prow, $o);
-        $ov->estop($msg);
-        return $ov;
-    }
-    /** @param PaperInfo $prow
-     * @return PaperValue */
-    static function make_force($prow, PaperOption $o) {
-        $ov = new PaperValue($prow, $o);
-        $o->value_force($ov);
-        return $ov;
-    }
-    function load_value_data() {
-        $ovd = $this->prow->option_value_data($this->id);
-        $this->set_value_data($ovd[0], $ovd[1]);
-    }
-    /** @param list<int> $values
-     * @param list<?string> $datas */
-    function set_value_data($values, $datas) {
-        if ($this->_values != $values) {
-            $this->_values = $values;
-            $this->_docset = null;
-        }
-        $this->value = $this->_values[0] ?? null;
-        $this->_data = $datas;
-    }
-    /** @return ?string */
-    function data() {
-        if ($this->_data === null) {
-            $this->load_value_data();
-        }
-        if ($this->value !== null) {
-            return $this->_data[0] ?? null;
-        } else {
-            return null;
-        }
-    }
-    /** @return int */
-    function value_count() {
-        return count($this->_values);
-    }
-    /** @return list<int> */
-    function value_list() {
-        return $this->_values;
-    }
-    /** @return list<?string> */
-    function data_list() {
-        if ($this->_data === null) {
-            $this->load_value_data();
-        }
-        return $this->_data;
-    }
-    /** @param int $index
-     * @return ?string */
-    function data_by_index($index) {
-        return ($this->data_list())[$index] ?? null;
-    }
-    /** @return DocumentInfoSet */
-    function document_set() {
-        assert($this->prow || empty($this->_values));
-        assert($this->option->has_document());
-        if ($this->_docset === null) {
-            // NB that $this->_docset might be invalidated by value_dids
-            $docset = new DocumentInfoSet;
-            foreach ($this->option->value_dids($this) as $did) {
-                if (($d = $this->prow->document($this->id, $did))) {
-                    $docset->add($d);
-                }
-            }
-            assert(!$this->_docset);
-            $this->_docset = $docset;
-        }
-        return $this->_docset;
-    }
-    /** @return list<DocumentInfo> */
-    function documents() {
-        return $this->document_set()->as_list();
-    }
-    /** @param int $index
-     * @return ?DocumentInfo */
-    function document($index) {
-        return $this->document_set()->document_by_index($index);
-    }
-    /** @param int $index
-     * @return string|false */
-    function document_content($index) {
-        $doc = $this->document($index);
-        return $doc ? $doc->content() : false;
-    }
-    /** @param string $name
-     * @return ?DocumentInfo */
-    function attachment($name) {
-        return $this->option->attachment($this, $name);
-    }
-    function invalidate() {
-        $this->prow->invalidate_options(true);
-        $this->load_value_data();
-    }
-    /** @param string $method */
-    function call($method, ...$args) {
-        return $this->option->$method($this, ...$args);
-    }
-
-    /** @param string $name
-     * @return bool */
-    function has_anno($name) {
-        return $this->_anno !== null && array_key_exists($name, $this->_anno);
-    }
-    /** @param string $name
-     * @return mixed */
-    function anno($name) {
-        return $this->_anno[$name] ?? null;
-    }
-    /** @param string $name
-     * @param mixed $value */
-    function set_anno($name, $value) {
-        $this->_anno[$name] = $value;
-    }
-    /** @param string $name
-     * @param mixed $value */
-    function push_anno($name, $value) {
-        $this->_anno = $this->_anno ?? [];
-        $this->_anno[$name][] = $value;
-    }
-
-    /** @return MessageSet */
-    function message_set() {
-        if ($this->_ms === null) {
-            $this->_ms = new MessageSet;
-            $this->_ms->set_want_ftext(true, 5);
-        }
-        return $this->_ms;
-    }
-    /** @param MessageSet $ms */
-    function append_messages_to($ms) {
-        if ($this->_ms) {
-            $ms->append_set($this->_ms);
-        }
-    }
-    /** @param string $field
-     * @param ?string $msg
-     * @param -5|-4|-3|-2|-1|0|1|2|3 $status */
-    function msg_at($field, $msg, $status) {
-        $this->message_set()->msg_at($field, $msg, $status);
-    }
-    /** @param ?string $msg
-     * @param -5|-4|-3|-2|-1|0|1|2|3 $status */
-    function msg($msg, $status) {
-        $this->message_set()->msg_at($this->option->field_key(), $msg, $status);
-    }
-    /** @param ?string $msg */
-    function estop($msg) {
-        $this->msg($msg, MessageSet::ESTOP);
-    }
-    /** @param ?string $msg */
-    function error($msg) {
-        $this->msg($msg, MessageSet::ERROR);
-    }
-    /** @param ?string $msg */
-    function warning($msg) {
-        $this->msg($msg, MessageSet::WARNING);
-    }
-    /** @return int */
-    function problem_status() {
-        return $this->_ms ? $this->_ms->problem_status() : 0;
-    }
-    /** @return bool */
-    function has_error() {
-        return $this->_ms && $this->_ms->has_error();
-    }
-    /** @return list<MessageItem> */
-    function message_list() {
-        return $this->_ms ? $this->_ms->message_list() : [];
-    }
-    #[\ReturnTypeWillChange]
-    function jsonSerialize() {
-        if ($this->_data === null
-            || $this->_data === []
-            || (count($this->_data) === 1 && $this->_data[0] === null)) {
-            $x = $this->value;
-        } else {
-            $x = [];
-            for ($i = 0; $i !== count($this->_values); ++$i) {
-                $x[] = [$this->_values[$i], $this->_data[$i]];
-            }
-        }
-        return [$this->option->json_key() => $x];
-    }
-}
-
-class PaperOptionList implements IteratorAggregate {
-    /** @var Conf */
-    private $conf;
-    /** @var array<int,object> */
-    private $_jmap;
-    /** @var array<int,?PaperOption> */
-    private $_omap = [];
-    /** @var array<int,object> */
-    private $_ijmap;
-    /** @var array<int,?PaperOption> */
-    private $_imap = [];
-    /** @var ?array<int,PaperOption> */
-    private $_olist;
-    /** @var ?array<int,PaperOption> */
-    private $_olist_nonfinal;
-    /** @var AbbreviationMatcher<PaperOption> */
-    private $_nonpaper_am;
-    private $_accumulator;
-
-    const DTYPE_SUBMISSION_JSON = '{"id":0,"name":"paper","json_key":"submission","form_order":1001,"type":"document","configurable":false}';
-    const DTYPE_FINAL_JSON = '{"id":-1,"name":"final","json_key":"final","form_order":1002,"type":"document","configurable":false}';
-
-    function __construct(Conf $conf) {
-        $this->conf = $conf;
-    }
-
-    function _add_json($oj, $k) {
-        if (!isset($oj->id) && $k === 0) {
-            throw new ErrorException("This conference could not be upgraded from an old database schema. A system administrator must fix this problem.");
-        }
-        if (is_string($oj->id) && is_numeric($oj->id)) { // XXX backwards compat
-            $oj->id = intval($oj->id);
-        }
-        if (is_int($oj->id) && $oj->id > 0) {
-            if ($this->conf->xt_allowed($oj)
-                && (!isset($this->_jmap[$oj->id])
-                    || Conf::xt_priority_compare($oj, $this->_jmap[$oj->id]) <= 0)) {
-                $this->_jmap[$oj->id] = $oj;
-            }
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    /** @return array<int,object> */
-    private function option_json_map() {
-        if ($this->_jmap === null) {
-            $this->_jmap = [];
-            if (($olist = $this->conf->setting_json("options"))) {
-                expand_json_includes_callback($olist, [$this, "_add_json"]);
-            }
-            if (($olist = $this->conf->opt("fixedOptions"))) {
-                expand_json_includes_callback($olist, [$this, "_add_json"]);
-            }
-            $this->_jmap = array_filter($this->_jmap, "Conf::xt_enabled");
-        }
-        return $this->_jmap;
-    }
-
-    private function add_abbrev_matcher(AbbreviationMatcher $am, $id, $oj) {
-        $cb = [$this, "option_by_id"];
-        $am->add_keyword_lazy("opt{$id}", $cb, [$id], Conf::MFLAG_OPTION);
-        if ($oj->name ?? null) {
-            $am->add_phrase_lazy($oj->name, $cb, [$id], Conf::MFLAG_OPTION);
-        }
-        $oj->search_keyword = $oj->search_keyword ?? $oj->json_key ?? null;
-        if ($oj->search_keyword) {
-            $am->add_keyword_lazy($oj->search_keyword, $cb, [$id], Conf::MFLAG_OPTION);
-        }
-        if (($oj->json_key ?? null)
-            && $oj->json_key !== $oj->search_keyword
-            && (($oj->name ?? null)
-                || strcasecmp(str_replace("_", " ", $oj->json_key), $oj->name) !== 0)) {
-            $am->add_keyword_lazy($oj->json_key, $cb, [$id], Conf::MFLAG_OPTION);
-        }
-    }
-
-    function populate_abbrev_matcher(AbbreviationMatcher $am) {
-        $cb = [$this, "option_by_id"];
-        $am->add_keyword_lazy("paper", $cb, [DTYPE_SUBMISSION], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("submission", $cb, [DTYPE_SUBMISSION], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("final", $cb, [DTYPE_FINAL], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("title", $cb, [PaperOption::TITLEID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("authors", $cb, [PaperOption::AUTHORSID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("nonblind", $cb, [PaperOption::ANONYMITYID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("contacts", $cb, [PaperOption::CONTACTSID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("abstract", $cb, [PaperOption::ABSTRACTID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("topics", $cb, [PaperOption::TOPICSID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("pc_conflicts", $cb, [PaperOption::PCCONFID], Conf::MFLAG_OPTION);
-        $am->add_keyword_lazy("collaborators", $cb, [PaperOption::COLLABORATORSID], Conf::MFLAG_OPTION);
-        $am->add_keyword("reviews", null); // reserve keyword
-        foreach ($this->option_json_map() as $id => $oj) {
-            if (($oj->nonpaper ?? false) !== true) {
-                $this->add_abbrev_matcher($am, $id, $oj);
-            }
-        }
-    }
-
-    function assign_search_keywords($nonpaper, AbbreviationMatcher $am) {
-        $cb = [$this, "option_by_id"];
-        foreach ($this->option_json_map() as $id => $oj) {
-            if (!isset($oj->search_keyword)
-                && (($oj->nonpaper ?? false) === true) === $nonpaper) {
-                if ($oj->name ?? null) {
-                    $e = AbbreviationEntry::make_lazy($oj->name, $cb, [$id], Conf::MFLAG_OPTION);
-                    $s = $am->ensure_entry_keyword($e, AbbreviationMatcher::KW_CAMEL) ?? false;
-                } else {
-                    $s = false;
-                }
-                $oj->search_keyword = $s;
-                if (($o = $this->_omap[$id] ?? null)) {
-                    $o->_search_keyword = $s;
-                }
-            }
-        }
-    }
-
-    function _add_intrinsic_json($oj) {
-        assert(is_int($oj->id) && $oj->id <= 0);
-        $this->_accumulator[(string) $oj->id][] = $oj;
-        return true;
-    }
-
-    /** @return array<int,object> */
-    private function intrinsic_json_map() {
-        if ($this->_ijmap === null) {
-            $this->_accumulator = $this->_ijmap = [];
-            foreach (["etc/intrinsicoptions.json", self::DTYPE_SUBMISSION_JSON, self::DTYPE_FINAL_JSON, $this->conf->opt("intrinsicOptions"), $this->conf->setting_json("ioptions")] as $x) {
-                if ($x)
-                    expand_json_includes_callback($x, [$this, "_add_intrinsic_json"]);
-            }
-            /** @phan-suppress-next-line PhanEmptyForeach */
-            foreach ($this->_accumulator as $id => $x) {
-                if (($ij = $this->conf->xt_search_name($this->_accumulator, $id, null)))
-                    $this->_ijmap[$ij->id] = $ij;
-            }
-            $this->_accumulator = null;
-        }
-        return $this->_ijmap;
-    }
-
-    /** @param int $id */
-    private function populate_intrinsic($id) {
-        if ($id == DTYPE_SUBMISSION) {
-            $this->_imap[$id] = new Document_PaperOption($this->conf, json_decode(self::DTYPE_SUBMISSION_JSON));
-        } else if ($id == DTYPE_FINAL) {
-            $this->_imap[$id] = new Document_PaperOption($this->conf, json_decode(self::DTYPE_FINAL_JSON));
-        } else {
-            $this->_imap[$id] = null;
-            if (($oj = ($this->intrinsic_json_map())[$id] ?? null)
-                && ($o = PaperOption::make($this->conf, $oj))) {
-                $this->_imap[$id] = $o;
-            }
-        }
-    }
-
-    /** @param int $id
-     * @return ?PaperOption */
-    function option_by_id($id) {
-        if ($id <= 0) {
-            if (!array_key_exists($id, $this->_imap)) {
-                $this->populate_intrinsic($id);
-            }
-            return $this->_imap[$id];
-        } else {
-            if (!array_key_exists($id, $this->_omap)) {
-                $this->_omap[$id] = null;
-                if (($oj = ($this->option_json_map())[$id] ?? null)
-                    && Conf::xt_enabled($oj)
-                    && $this->conf->xt_allowed($oj)) {
-                    $this->_omap[$id] = PaperOption::make($this->conf, $oj);
-                }
-            }
-            return $this->_omap[$id];
-        }
-    }
-
-    /** @param int $id
-     * @return PaperOption */
-    function checked_option_by_id($id) {
-        $o = $this->option_by_id($id);
-        if (!$o) {
-            throw new ErrorException("PaperOptionList::checked_option_by_id($id) failed");
-        }
-        return $o;
-    }
-
-    /** @param string $key
-     * @return ?PaperOption */
-    function option_by_field_key($key) {
-        // Since this function is rarely used, don’t bother optimizing it.
-        if (($colon = strpos($key, ":"))) {
-            $key = substr($key, 0, $colon);
-        }
-        foreach ($this->unsorted_field_list(null, null) as $f) {
-            if ($f->field_key() === $key)
-                return $f;
-        }
-        return null;
-    }
-
-    /** @return array<int,PaperOption> */
-    function normal() {
-        if ($this->_olist === null) {
-            $this->_olist = [];
-            foreach ($this->option_json_map() as $id => $oj) {
-                if (($oj->nonpaper ?? false) !== true
-                    && ($o = $this->option_by_id($id))) {
-                    $this->_olist[$id] = $o;
-                }
-            }
-            uasort($this->_olist, "PaperOption::compare");
-        }
-        return $this->_olist;
-    }
-
-    /** @return Iterator<PaperOption> */
-    #[\ReturnTypeWillChange]
-    function getIterator() {
-        $this->normal();
-        return new ArrayIterator($this->_olist);
-    }
-
-    /** @return array<int,PaperOption> */
-    function nonfinal() {
-        if ($this->_olist_nonfinal === null) {
-            $this->_olist_nonfinal = [];
-            foreach ($this->option_json_map() as $id => $oj) {
-                if (($oj->nonpaper ?? false) !== true
-                    && ($oj->final ?? false) !== true
-                    && ($o = $this->option_by_id($id))) {
-                    assert(!$o->nonpaper && !$o->final);
-                    $this->_olist_nonfinal[$id] = $o;
-                }
-            }
-            uasort($this->_olist_nonfinal, "PaperOption::compare");
-        }
-        return $this->_olist_nonfinal;
-    }
-
-    /** @return array<int,PaperOption> */
-    function nonpaper() {
-        $list = [];
-        foreach ($this->option_json_map() as $id => $oj) {
-            if (($oj->nonpaper ?? false) === true
-                && ($o = $this->option_by_id($id)))
-                $list[$id] = $o;
-        }
-        uasort($list, "PaperOption::compare");
-        return $list;
-    }
-
-    /** @return array<int,PaperOption> */
-    function universal() {
-        $list = [];
-        foreach ($this->option_json_map() as $id => $oj) {
-            if (($o = $this->option_by_id($id)))
-                $list[$id] = $o;
-        }
-        uasort($list, "PaperOption::compare");
-        return $list;
-    }
-
-    private function _get_field($id, $oj, $nonfinal) {
-        if (($oj->nonpaper ?? false) !== true
-            && !($nonfinal && ($oj->final ?? false) === true)) {
-            return $this->option_by_id($id);
-        } else {
-            return null;
-        }
-    }
-
-    /** @param ?string $key
-     * @return array<int,PaperOption> */
-    private function unsorted_field_list(PaperInfo $prow = null, $key = null) {
-        $nonfinal = $prow && $prow->outcome_sign <= 0;
-        $olist = [];
-        foreach ($this->intrinsic_json_map() as $id => $oj) {
-            if ((!$key || ($oj->$key ?? null) !== false)
-                && ($o = $this->_get_field($id, $oj, $nonfinal)))
-                $olist[$id] = $o;
-        }
-        foreach ($this->option_json_map() as $id => $oj) {
-            if ((!$key || ($oj->$key ?? null) !== false)
-                && ($o = $this->_get_field($id, $oj, $nonfinal)))
-                $olist[$id] = $o;
-        }
-        return $olist;
-    }
-
-    /** @return array<int,PaperOption> */
-    function form_fields(PaperInfo $prow = null) {
-        $olist = $this->unsorted_field_list($prow, "form_order");
-        uasort($olist, "PaperOption::form_compare");
-        return $olist;
-    }
-
-    /** @return array<int,PaperOption> */
-    function page_fields(PaperInfo $prow = null) {
-        $olist = $this->unsorted_field_list($prow, "page_order");
-        uasort($olist, "PaperOption::compare");
-        return $olist;
-    }
-
-    function invalidate_options() {
-        if ($this->_jmap !== null || $this->_ijmap !== null) {
-            $this->_jmap = $this->_ijmap = null;
-            $this->_omap = $this->_imap = [];
-            $this->_olist = $this->_olist_nonfinal = $this->_nonpaper_am = null;
-        }
-    }
-
-    /** @param int $id */
-    function invalidate_intrinsic_option($id) {
-        unset($this->_imap[$id]);
-    }
-
-    /** @return bool */
-    function has_universal() {
-        return count($this->option_json_map()) !== 0;
-    }
-
-    /** @return array<int,PaperOption> */
-    function find_all($name) {
-        $iname = strtolower($name);
-        if ($iname === (string) DTYPE_SUBMISSION
-            || $iname === "paper"
-            || $iname === "submission") {
-            return [DTYPE_SUBMISSION => $this->option_by_id(DTYPE_SUBMISSION)];
-        } else if ($iname === (string) DTYPE_FINAL
-                   || $iname === "final") {
-            return [DTYPE_FINAL => $this->option_by_id(DTYPE_FINAL)];
-        } else if ($iname === "" || $iname === "none") {
-            return [];
-        } else if ($iname === "any") {
-            return $this->normal();
-        } else if (substr($iname, 0, 3) === "opt"
-                   && ctype_digit(substr($iname, 3))) {
-            $o = $this->option_by_id((int) substr($iname, 3));
-            return $o ? [$o->id => $o] : [];
-        } else {
-            if (substr($iname, 0, 4) === "opt-") {
-                $name = substr($name, 4);
-            }
-            $omap = [];
-            foreach ($this->conf->find_all_fields($name, Conf::MFLAG_OPTION) as $o) {
-                $omap[$o->id] = $o;
-            }
-            return $omap;
-        }
-    }
-
-    /** @return ?PaperOption */
-    function find($name) {
-        $omap = $this->find_all($name);
-        reset($omap);
-        return count($omap) === 1 ? current($omap) : null;
-    }
-
-    /** @return AbbreviationMatcher<PaperOption> */
-    function nonpaper_abbrev_matcher() {
-        // Nonpaper options aren't stored in the main abbrevmatcher; put them
-        // in their own.
-        if (!$this->_nonpaper_am) {
-            $this->_nonpaper_am = new AbbreviationMatcher;
-            foreach ($this->option_json_map() as $id => $oj) {
-                if (($oj->nonpaper ?? false) === true) {
-                    $this->add_abbrev_matcher($this->_nonpaper_am, $id, $oj);
-                }
-            }
-            $this->assign_search_keywords(true, $this->_nonpaper_am);
-        }
-        return $this->_nonpaper_am;
-    }
-
-    /** @return array<int,PaperOption> */
-    function find_all_nonpaper($name) {
-        $omap = [];
-        foreach ($this->nonpaper_abbrev_matcher()->find_all($name) as $o) {
-            $omap[$o->id] = $o;
-        }
-        return $omap;
-    }
-
-    /** @return ?PaperOption */
-    function find_nonpaper($name) {
-        $omap = $this->find_all_nonpaper($name);
-        reset($omap);
-        return count($omap) == 1 ? current($omap) : null;
-    }
-}
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class PaperOption implements JsonSerializable {
     const TITLEID = -1000;
@@ -656,7 +19,7 @@ class PaperOption implements JsonSerializable {
     /** @var int
      * @readonly */
     public $id;
-    /** @var ?string
+    /** @var string
      * @readonly */
     public $name;
     /** @var string
@@ -675,19 +38,17 @@ class PaperOption implements JsonSerializable {
     /** @var null|string|false */
     public $_search_keyword;
     /** @var string */
-    private $description;
-    /** @var ?int */
-    private $description_format;
+    protected $description;
     public $order;
     /** @var bool
      * @readonly */
     public $nonpaper;
-    /** @var bool
+    /** @var 0|1|2
      * @readonly */
     public $required;
-    /** @var bool
+    /** @var null|0|1
      * @readonly */
-    public $final;
+    private $_phase;
     /** @var bool
      * @readonly */
     public $configurable;
@@ -697,7 +58,14 @@ class PaperOption implements JsonSerializable {
     /** @var int
      * @readonly */
     private $_visibility;
+    /** @var 0|1|2|3|4|5
+     * @readonly */
+    private $_display;
+    /** @var bool
+     * @readonly */
     public $page_expand;
+    /** @var ?string
+     * @readonly */
     public $page_group;
     private $form_order;
     private $page_order;
@@ -707,6 +75,8 @@ class PaperOption implements JsonSerializable {
     public $classes;
     /** @var ?string */
     private $exists_if;
+    /** @var -1|0|1 */
+    private $_exists_state;
     /** @var ?SearchTerm */
     private $_exists_term;
     /** @var ?string */
@@ -716,6 +86,21 @@ class PaperOption implements JsonSerializable {
     /** @var int */
     private $_recursion = 0;
     public $max_size;
+
+    const DISP_TITLE = 0;
+    const DISP_TOP = 1;
+    const DISP_LEFT = 2;
+    const DISP_RIGHT = 3;
+    const DISP_REST = 4;
+    const DISP_NONE = 5;
+    static private $display_map = ["title", "top", "left", "right", "rest", "none"];
+    /** @var list<int>
+     * @readonly */
+    static public $display_form_order = [0, 1000, 2000, 3000, 3500, 5000];
+
+    const REQ_NO = 0;
+    const REQ_REGISTER = 1;
+    const REQ_SUBMIT = 2;
 
     const VIS_SUB = 0;         // visible if paper is visible (= all)
     const VIS_AUTHOR = 1;      // visible if authors are visible
@@ -739,21 +124,20 @@ class PaperOption implements JsonSerializable {
         "slides" => "+Document_PaperOption",
         "video" => "+Document_PaperOption",
         "document" => "+Document_PaperOption",
-        "attachments" => "+Attachments_PaperOption"
+        "attachments" => "+Attachments_PaperOption",
+        "topics" => "+Topics_PaperOption"
     ];
 
     /** @param stdClass|Sf_Setting $args
      * @param string $default_className */
     function __construct(Conf $conf, $args, $default_className = "") {
-        assert(is_object($args));
-        assert($args->id > 0 || $args->id === -4 || isset($args->json_key));
+        $oid = $args->option_id ?? $args->id;
+        assert($oid > 0 || $oid === -4 || isset($args->json_key));
+
         $this->conf = $conf;
-        $this->id = (int) $args->id;
-        $this->name = $args->name ?? null;
-        $this->title = $args->title ?? null;
-        if ($this->title === null && $this->id > 0) {
-            $this->title = $this->name;
-        }
+        $this->id = (int) $oid;
+        $this->name = $args->name ?? "";
+        $this->title = $args->title ?? ($this->id > 0 ? $this->name : null);
         $this->type = $args->type ?? null;
         if ($this->type === "selector") { /* XXX backward compat */
             $this->type = "dropdown";
@@ -763,64 +147,86 @@ class PaperOption implements JsonSerializable {
         $this->_search_keyword = $args->search_keyword ?? $this->_json_key;
         $this->formid = $this->id > 0 ? "opt{$this->id}" : $this->_json_key;
 
-        $this->description = $args->description ?? "";
-        $this->description_format = $args->description_format ?? null;
         $this->nonpaper = ($args->nonpaper ?? false) === true;
-        $this->required = !!($args->required ?? false);
-        $this->final = ($args->final ?? false) === true;
         $this->configurable = ($args->configurable ?? null) !== false;
         $this->include_empty = ($args->include_empty ?? false) === true;
 
-        $vis = $args->visibility ?? $args->view_type ?? null;
-        if ($vis === null || $vis === "all" || $vis === "rev") {
-            $this->_visibility = self::VIS_SUB;
-        } else if ($vis === "nonblind") {
-            $this->_visibility = self::VIS_AUTHOR;
-        } else if ($vis === "conflict") {
-            $this->_visibility = self::VIS_CONFLICT;
-        } else if ($vis === "review") {
-            $this->_visibility = self::VIS_REVIEW;
-        } else if ($vis === "admin") {
-            $this->_visibility = self::VIS_ADMIN;
+        $this->description = $args->description ?? "";
+
+        $req = $args->required ?? false;
+        if (!$req) {
+            $this->required = self::REQ_NO;
+        } else if ($req === "submit" || $req === self::REQ_SUBMIT) {
+            $this->required = self::REQ_SUBMIT;
         } else {
+            $this->required = self::REQ_REGISTER;
+        }
+
+        $vis = $args->visibility ?? /* XXX */ $args->view_type ?? null;
+        if ($vis !== null) {
+            if (($x = array_search($vis, self::$visibility_map)) !== false) {
+                $this->_visibility = $x;
+            } else if ($vis === "rev" /* XXX */) {
+                $this->_visibility = self::VIS_SUB;
+            }
+        }
+        if ($vis === null) {
             $this->_visibility = self::VIS_SUB;
         }
 
-        $order = $args->order ?? $args->position ?? null;
+        $disp = $args->display ?? null;
+        if ($disp !== null) {
+            if (($x = array_search($disp, self::$display_map)) !== false) {
+                $this->_display = $x;
+            } else if ($disp === "submission" /* XXX */) {
+                $this->_display = self::DISP_TOP;
+            } else if ($disp === "prominent" /* XXX */) {
+                $this->_display = self::DISP_RIGHT;
+            } else if ($disp === "topics" /* XXX */) {
+                $this->_display = self::DISP_REST;
+            }
+        }
+
+        $fo = $args->form_order ?? $args->form_position /* XXX */ ?? null;
+        if ($this->_display === null) {
+            if ($fo === null || $fo >= 3500) {
+                $this->_display = self::DISP_REST;
+            } else if ($fo >= 3000) {
+                $this->_display = self::DISP_RIGHT;
+            } else {
+                $this->_display = self::DISP_TOP;
+            }
+        }
+
+        $order = $args->order ?? $args->position /* XXX */ ?? null;
         if ((is_int($order) || is_float($order))
             && ($this->id <= 0 || $order > 0)) {
             $this->order = $order;
+            $cfo = self::$display_form_order[$this->_display] + 100 + $order;
         } else {
-            $this->order = 499;
+            $this->order = 399;
+            $cfo = $fo ?? self::$display_form_order[$this->_display] + 499;
         }
 
-        $p = $args->form_order ?? $args->form_position ?? null;
-        if ($p === null) {
-            $disp = $args->display ?? null;
-            if ($disp === "submission") {
-                $p = 1100 + $this->order;
-            } else if ($disp === "prominent") {
-                $p = 3100 + $this->order;
-            } else {
-                $p = 3600 + $this->order;
-            }
-        }
-        $this->form_order = $p;
+        $this->form_order = $fo ?? $cfo;
+        $this->page_order = $args->page_order ?? $cfo;
 
-        if (($args->display ?? null) === "none") {
-            $p = false;
-        }
-        $this->page_order = $args->page_order ?? $args->page_position ?? $args->display_position ?? $p;
         $this->page_expand = !!($args->page_expand ?? false);
         $this->page_group = $args->page_group ?? null;
-        if ($this->page_group === null
-            && $this->page_order >= 3500
-            && $this->page_order < 4000) {
+        if ($this->page_group === null && $this->_display === self::DISP_REST) {
             $this->page_group = "topics";
         }
 
-        $this->classes = explode(" ", $args->className ?? $default_className);
+        $this->set_exists_condition($args->exists_if ?? (($args->final ?? false) ? "phase:final" : null));
+        $this->set_editable_condition($args->editable_if ?? null);
 
+        $this->classes = explode(" ", $args->className ?? $default_className);
+        $this->set_render_contexts();
+
+        $this->max_size = $args->max_size ?? null;
+    }
+
+    private function set_render_contexts() {
         $this->render_contexts = FieldRender::CFPAGE | FieldRender::CFLIST | FieldRender::CFSUGGEST | FieldRender::CFMAIL | FieldRender::CFFORM;
         foreach ($this->classes as $k) {
             if ($k === "hidden") {
@@ -829,6 +235,8 @@ class PaperOption implements JsonSerializable {
                 $this->render_contexts &= ~FieldRender::CFPAGE;
             } else if ($k === "no-form") {
                 $this->render_contexts &= ~FieldRender::CFFORM;
+            } else if ($k === "only-page") {
+                $this->render_contexts &= FieldRender::CFPAGE;
             } else if ($k === "only-form") {
                 $this->render_contexts &= FieldRender::CFFORM;
             } else if ($k === "no-list") {
@@ -843,13 +251,9 @@ class PaperOption implements JsonSerializable {
         if ($this->page_order === false) {
             $this->render_contexts &= ~FieldRender::CFPAGE;
         }
-
-        $x = property_exists($args, "exists_if") ? $args->exists_if : ($args->edit_condition ?? null);
-        // XXX edit_condition backward compat
-        $this->set_exists_condition($x);
-        $this->set_editable_condition($args->editable_if ?? null);
-
-        $this->max_size = $args->max_size ?? null;
+        if ($this->_exists_state < 0) {
+            $this->render_contexts &= ~(FieldRender::CFFORM | FieldRender::CFPAGE);
+        }
     }
 
     /** @param stdClass|Sf_Setting $args
@@ -876,21 +280,19 @@ class PaperOption implements JsonSerializable {
     /** @param PaperOption $a
      * @param PaperOption $b */
     static function compare($a, $b) {
-        $ap = $a->page_order();
-        $ap = $ap !== false ? $ap : PHP_INT_MAX;
-        $bp = $b->page_order();
-        $bp = $bp !== false ? $bp : PHP_INT_MAX;
-        return $ap <=> $bp ? : (strcasecmp($a->title, $b->title) ? : $a->id <=> $b->id);
+        return $a->_display <=> $b->_display
+            ? : $a->page_order <=> $b->page_order
+            ? : $a->id <=> $b->id;
     }
 
     /** @param PaperOption $a
      * @param PaperOption $b */
     static function form_compare($a, $b) {
-        $ap = $a->form_order();
-        $ap = $ap !== false ? $ap : PHP_INT_MAX;
-        $bp = $b->form_order();
-        $bp = $bp !== false ? $bp : PHP_INT_MAX;
-        return $ap <=> $bp ? : (strcasecmp($a->title, $b->title) ? : $a->id <=> $b->id);
+        $ap = $a->form_order;
+        $ap = $ap !== false ? $ap : INF;
+        $bp = $b->form_order;
+        $bp = $bp !== false ? $bp : INF;
+        return $ap <=> $bp ? : $a->id <=> $b->id;
     }
 
     /** @param string $s
@@ -900,49 +302,66 @@ class PaperOption implements JsonSerializable {
         if (str_ends_with($s, "-")) {
             $s = substr($s, 0, -1);
         }
-        if (!preg_match('/\A(?:title|paper|submission|final|authors|blind|nonblind|contacts|abstract|topics|pcconf|collaborators|reviews|sclass|submit.*|htctl.*|fold.*|pcc\d*|body.*|tracker.*|msg.*|header.*|footer.*|quicklink.*|tla.*|form-.*|has-.*|[-_].*|)\z/', $s)) {
+        if (!preg_match('/\A(?:title|paper|submission|final|authors|blind|nonblind|contacts|abstract|topics|pc_conflicts|pcconf|collaborators|reviews|sclass|status.*|submit.*|fold.*|[a-z]?[a-z]?[-_].*|has[-_].*|)\z/', $s)) {
             return $s;
         } else {
-            return "field-" . $s;
+            return "sf-" . $s;
         }
     }
 
-    /** @return string */
-    function title($context = null) {
-        if ($this->title) {
-            return $this->title;
-        } else if ($context === null) {
-            return $this->conf->_ci("field", $this->formid);
-        } else {
-            return $this->conf->_ci("field", $this->formid, $context);
-        }
+    /** @return list<FmtArg> */
+    function field_fmt_context() {
+        return [];
     }
-    /** @return string */
-    function title_html($context = null) {
-        return htmlspecialchars($this->title($context));
+    /** @param ?PaperInfo $prow
+     * @return list<FmtArg> */
+    final function edit_field_fmt_context($prow = null) {
+        $req = $this->required > 0 && (!$prow || $this->test_required($prow));
+        return make_array(new FmtArg("edit", true), new FmtArg("required", $req), ...$this->field_fmt_context());
+    }
+    /** @param FmtArg ...$context
+     * @return string */
+    function title(...$context) {
+        return $this->title
+            ?? $this->conf->_i("sf_{$this->formid}", ...$context, ...$this->field_fmt_context())
+            ?? $this->name;
+    }
+    /** @param FmtArg ...$context
+     * @return string */
+    function title_html(...$context) {
+        return htmlspecialchars($this->title(...$context));
     }
     /** @return string */
     function plural_title() {
-        return $this->title ?? $this->conf->_ci("field/plural", $this->formid);
+        return $this->title(new FmtArg("plural", true));
     }
-    /** @return string */
-    function edit_title() {
-        return $this->title ?? $this->conf->_ci("field/edit", $this->formid);
+    /** @param ?PaperInfo $prow
+     * @return string */
+    function edit_title($prow = null) {
+        // see also Options_SettingParser::_intrinsic_member_defaults
+        return $this->title
+            ?? $this->conf->_i("sf_{$this->formid}", ...$this->edit_field_fmt_context($prow))
+            ?? $this->name;
     }
     /** @return string */
     function missing_title() {
-        return $this->title ?? $this->conf->_ci("field/missing", $this->formid);
+        return $this->title(new FmtArg("edit", true), new FmtArg("missing", true));
     }
 
     /** @param FieldRender $fr */
-    function render_description($fr, ...$context_args) {
-        $fr->value_format = $this->description_format ?? 5;
+    function render_description($fr) {
         if ($this->description !== "") {
-            $fr->value = $this->description;
+            if (strcasecmp($this->description, "none") !== 0) {
+                list($fmt, $fr->value) = Ftext::parse($this->description);
+                $fr->value_format = $fmt ?? 5;
+            }
         } else {
-            $this->conf->fmt()->render_ci($fr, "field_description/edit", $this->formid,
-                                          ...$context_args);
+            $this->render_default_description($fr);
         }
+    }
+    /** @param FieldRender $fr */
+    function render_default_description($fr) {
+        $this->conf->fmt()->render_ci($fr, null, "sfdescription_{$this->formid}", ...$this->field_fmt_context());
     }
 
     /** @return AbbreviationMatcher */
@@ -989,7 +408,7 @@ class PaperOption implements JsonSerializable {
     /** @return string */
     function json_key() {
         if ($this->_json_key === null) {
-            if ($this->name !== null) {
+            if ($this->name !== "") {
                 $am = $this->abbrev_matcher();
                 $e = AbbreviationEntry::make_lazy($this->name, [$this->conf->options(), "option_by_id"], [$this->id], Conf::MFLAG_OPTION);
                 $this->_json_key = $am->find_entry_keyword($e, AbbreviationMatcher::KW_UNDERSCORE | AbbreviationMatcher::KW_FULLPHRASE);
@@ -1007,9 +426,9 @@ class PaperOption implements JsonSerializable {
         return $this->json_key();
     }
 
-    /** @return int|float|false */
-    function form_order() {
-        return $this->form_order;
+    /** @return string */
+    function description() {
+        return $this->description;
     }
     /** @return int|float|false */
     function page_order() {
@@ -1026,69 +445,161 @@ class PaperOption implements JsonSerializable {
     /** @return bool */
     function always_visible() {
         return $this->_visibility === self::VIS_SUB
-            && !$this->final
-            && $this->exists_if === null;
+            && !$this->_phase
+            && $this->_exists_state > 0;
     }
 
     /** @param null|bool|string $expr
      * @return ?string */
     static private function clean_condition($expr) {
-        if ($expr === null || $expr === true || $expr === "") {
+        if ($expr === false) {
+            return "NONE";
+        } else if ($expr === null
+                   || $expr === true
+                   || $expr === ""
+                   || strcasecmp($expr, "all") === 0) {
             return null;
+        } else if (strcasecmp($expr, "none") === 0) {
+            return "NONE";
         } else {
-            return $expr === false ? "NONE" : $expr;
+            return $expr;
+        }
+    }
+
+    /** @return ?string */
+    final function exists_condition() {
+        if ($this->exists_if !== null) {
+            return $this->exists_if;
+        } else if ($this->_phase === PaperInfo::PHASE_FINAL) {
+            return "phase:final";
+        } else {
+            return null;
+        }
+    }
+    /** @param null|bool|string|SearchTerm $x
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_exists_condition($x) {
+        // NB It is important to NOT instantiate the search term yet!
+        // Parsing the search term requires access to all options, but not
+        // all options have been constructed when this is called.
+        $this->_phase = null;
+        if ($x instanceof SearchTerm) {
+            $this->exists_if = $x instanceof False_SearchTerm ? "NONE" : "<special>";
+            $this->_exists_term = $x;
+            $this->_phase = Phase_SearchTerm::term_phase($x);
+        } else {
+            $x = self::clean_condition($x);
+            if ($x === null) {
+                $this->exists_if = null;
+                $this->_exists_term = null;
+            } else if (strcasecmp($x, "none") === 0) {
+                $this->exists_if = "NONE";
+                $this->_exists_term = new False_SearchTerm;
+            } else if (strcasecmp($x, "phase:final") === 0) {
+                $this->exists_if = null;
+                $this->_exists_term = null;
+                $this->_phase = PaperInfo::PHASE_FINAL;
+            } else {
+                $this->exists_if = self::clean_condition($x);
+                $this->_exists_term = null;
+            }
+        }
+        if ($this->exists_if === null) {
+            $this->_exists_state = 1;
+        } else if ($this->exists_if === "NONE") {
+            $this->_exists_state = -1;
+        } else {
+            $this->_exists_state = 0;
+        }
+        if ($this->render_contexts !== null) {
+            $this->set_render_contexts();
+        }
+    }
+    /** @param ?bool $x */
+    final function override_exists_condition($x) {
+        if ($x === true || ($x === null && $this->exists_if === null)) {
+            $this->_exists_state = 1;
+            $this->_exists_term = null;
+        } else if ($x === false || ($x === null && $this->exists_if === "NONE")) {
+            $this->_exists_state = -1;
+            $this->_exists_term = new False_SearchTerm;
+        } else {
+            $this->_exists_state = 0;
+            $this->_exists_term = null;
+        }
+        if ($this->render_contexts !== null) {
+            $this->set_render_contexts();
         }
     }
     /** @return SearchTerm */
     private function exists_term() {
-        if ($this->_exists_term === null) {
+        if ($this->_exists_state === 0 && $this->_exists_term === null) {
             $s = new PaperSearch($this->conf->root_user(), $this->exists_if);
             $s->set_expand_automatic(true);
             $this->_exists_term = $s->full_term();
+            /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
+            $this->_phase = Phase_SearchTerm::term_phase($this->_exists_term);
         }
         return $this->_exists_term;
     }
-
-    /** @return ?string */
-    function exists_condition() {
-        return $this->exists_if;
-    }
-    /** @param $x null|bool|string */
-    function set_exists_condition($x) {
-        $this->exists_if = self::clean_condition($x);
-        $this->_exists_term = null;
+    /** @return bool */
+    final function test_can_exist() {
+        return $this->_exists_state >= 0;
     }
     /** @return bool */
-    function test_exists(PaperInfo $prow) {
-        if ($this->exists_if === null) {
-            return true;
+    final function has_complex_exists_condition() {
+        return $this->_exists_state === 0;
+    }
+    /** @return bool */
+    final function is_final() {
+        // compute phase of complex exists condition
+        $this->exists_term();
+        return $this->_phase === PaperInfo::PHASE_FINAL;
+    }
+    /** @param bool $use_script_expression
+     * @return bool */
+    final function test_exists(PaperInfo $prow, $use_script_expression = false) {
+        if ($this->_phase !== null
+            && $prow->phase() !== $this->_phase) {
+            return false;
+        } else if ($this->_exists_state !== 0) {
+            return $this->_exists_state > 0;
         } else if (++$this->_recursion > 5) {
             throw new ErrorException("Recursion in {$this->name}::test_exists");
         } else {
-            $x = $this->exists_term()->test($prow, null);
+            if ($use_script_expression) {
+                $x = !!($this->exists_script_expression($prow) ?? true);
+            } else {
+                $x = $this->exists_term()->test($prow, null);
+            }
             --$this->_recursion;
             return $x;
         }
     }
-    function exists_script_expression(PaperInfo $prow) {
-        if ($this->exists_if === null) {
+    final function exists_script_expression(PaperInfo $prow) {
+        if ($this->_exists_state > 0) {
             return null;
         } else {
-            return $this->exists_term()->script_expression($prow);
+            return $this->exists_term()->script_expression($prow, SearchTerm::ABOUT_PAPER);
         }
     }
 
     /** @return ?string */
-    function editable_condition() {
+    final function editable_condition() {
         return $this->editable_if;
     }
-    /** @param $x null|bool|string */
-    function set_editable_condition($x) {
-        $this->editable_if = self::clean_condition($x);
-        $this->_editable_term = null;
+    /** @param $x null|bool|string|SearchTerm */
+    final function set_editable_condition($x) {
+        if ($x instanceof SearchTerm) {
+            $this->editable_if = $x instanceof False_SearchTerm ? "NONE" : "<special>";
+            $this->_editable_term = $x;
+        } else {
+            $this->editable_if = self::clean_condition($x);
+            $this->_editable_term = null;
+        }
     }
     /** @return bool */
-    function test_editable(PaperInfo $prow) {
+    final function test_editable(PaperInfo $prow) {
         if ($this->editable_if === null) {
             return true;
         }
@@ -1107,12 +618,13 @@ class PaperOption implements JsonSerializable {
 
     /** @return bool */
     function test_required(PaperInfo $prow) {
-        // Invariant: `$o->test_required($prow)` implies `$o->required`.
-        return $this->required && $this->test_exists($prow);
+        // Invariant: `$o->test_required($prow)` implies `$o->required > 0`.
+        return $this->required > 0;
     }
-    protected function set_required($x) {
+    /** @param 0|1|2 $req */
+    protected function set_required($req) {
         /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
-        $this->required = $x;
+        $this->required = $req;
     }
 
     /** @return bool */
@@ -1156,28 +668,39 @@ class PaperOption implements JsonSerializable {
     static function basic_value_compare($av, $bv) {
         $av = $av ? $av->value : null;
         $bv = $bv ? $bv->value : null;
-        if ($av === $bv) {
-            return 0;
-        } else if ($av === null || $bv === null) {
-            return $av === null ? -1 : 1;
-        } else {
-            return $av <=> $bv;
+        if ($av === null || $bv === null) {
+            return ($av === null ? 0 : 1) <=> ($bv === null ? 0 : 1);
         }
+        return $av <=> $bv;
     }
-    function value_check(PaperValue $ov, Contact $user) {
+    /** @return bool */
+    function value_check_required(PaperValue $ov) {
         if ($this->test_required($ov->prow)
             && !$this->value_present($ov)
             && !$ov->prow->allow_absent()) {
-            $ov->error("<0>Entry required");
+            if ($this->required === self::REQ_SUBMIT) {
+                $m = $this->conf->_("<0>Entry required to complete submission");
+                $ov->msg($m, $ov->prow->want_submitted() ? MessageSet::ERROR : MessageSet::WARNING);
+            } else {
+                $ov->error("<0>Entry required");
+            }
+            return false;
+        } else {
+            return true;
         }
+    }
+    function value_check(PaperValue $ov, Contact $user) {
+        $this->value_check_required($ov);
     }
     /** @return list<int> */
     function value_dids(PaperValue $ov) {
         return [];
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    /** @return mixed */
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return null;
     }
+    /** @return void */
     function value_store(PaperValue $ov, PaperStatus $ps) {
     }
     /** @return bool */
@@ -1191,23 +714,26 @@ class PaperOption implements JsonSerializable {
         return null;
     }
 
+    /** @return 0|1|2|3|4|5 */
+    function display() {
+        return $this->_display;
+    }
     /** @return string */
     function display_name() {
         if ($this->page_order === false) {
             return "none";
-        } else if ($this->page_order < 3000) {
-            return "submission";
-        } else if ($this->page_order < 3500) {
-            return "prominent";
         } else {
-            return "topics";
+            return self::$display_map[$this->_display];
         }
     }
 
     #[\ReturnTypeWillChange]
     /** @return object */
     function jsonSerialize() {
-        $j = (object) ["id" => (int) $this->id, "name" => $this->name];
+        $j = (object) ["id" => (int) $this->id];
+        if ($this->name !== "") {
+            $j->name = $this->name;
+        }
         if ($this->type !== null) {
             $j->type = $this->type;
         }
@@ -1215,13 +741,11 @@ class PaperOption implements JsonSerializable {
         if ($this->description !== "") {
             $j->description = $this->description;
         }
-        if ($this->description_format !== null) {
-            $j->description_format = $this->description_format;
-        }
         if ($this->configurable !== true) {
             $j->configurable = $this->configurable;
         }
-        if ($this->final) {
+        $this->exists_term(); // to set `_phase`
+        if ($this->_phase === PaperInfo::PHASE_FINAL) {
             $j->final = true;
         }
         $j->display = $this->display_name();
@@ -1234,7 +758,9 @@ class PaperOption implements JsonSerializable {
         if ($this->editable_if !== null) {
             $j->editable_if = $this->editable_if;
         }
-        if ($this->required) {
+        if ($this->required === self::REQ_SUBMIT) {
+            $j->required = "submit";
+        } else if ($this->required) {
             $j->required = true;
         }
         if ($this->max_size !== null) {
@@ -1246,21 +772,34 @@ class PaperOption implements JsonSerializable {
     /** @return Sf_Setting */
     function export_setting() {
         $sfs = new Sf_Setting;
-        $sfs->id = $this->id;
-        $sfs->name = $this->name;
+        $sfs->option_id = $this->id;
+        if ($this->id <= 0 && $this->id !== DTYPE_INVALID) {
+            $sfs->id = $sfs->json_key = $this->_json_key;
+            $sfs->name = $this->edit_title();
+            $sfs->function = "+" . get_class($this);
+        } else {
+            $sfs->id = $this->id;
+            $sfs->name = $this->name;
+        }
         $sfs->type = $this->type;
-        $sfs->description = $this->description;
+
+        if (strcasecmp($this->description, "none") === 0) {
+            $sfs->description = "none";
+        } else {
+            $fr = new FieldRender(FieldRender::CFHTML);
+            $this->render_description($fr);
+            $sfs->description = $fr->value_html();
+        }
+
         $sfs->display = $this->display_name();
         $sfs->order = $this->order;
         $sfs->visibility = $this->unparse_visibility();
         $sfs->required = $this->required;
-        if ($this->exists_if) {
-            $sfs->presence = "custom";
-            $sfs->exists_if = $this->exists_if;
-        } else {
-            $sfs->presence = $this->final ? "final" : "all";
-            $sfs->exists_if = null;
-        }
+        $sfs->exists_if = $this->exists_if
+            ?? ($this->_phase === PaperInfo::PHASE_FINAL ? "phase:final" : "ALL");
+        $sfs->exists_disabled = $this->_exists_state < 0;
+        $sfs->editable_if = $this->editable_if ?? "ALL";
+        $sfs->source_option = $this;
         return $sfs;
     }
 
@@ -1302,6 +841,7 @@ class PaperOption implements JsonSerializable {
             return PaperValue::make_estop($prow, $this, "<0>Expected string");
         }
     }
+
     /** @param PaperValue $ov
      * @param PaperValue $reqov */
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
@@ -1310,9 +850,11 @@ class PaperOption implements JsonSerializable {
      * @param PaperValue $reqov */
     function print_web_edit_text(PaperTable $pt, $ov, $reqov, $extra = []) {
         $default_value = null;
-        if ($ov->data() !== $reqov->data()
-            && trim($ov->data()) !== trim(cleannl((string) $reqov->data()))) {
-            $default_value = $ov->data() ?? "";
+        $od = $ov->data();
+        $reqd = $reqov->data();
+        if ($od !== $reqd
+            && trim($od ?? "") !== trim(cleannl($reqd ?? ""))) {
+            $default_value = $od ?? "";
         }
         $pt->print_editable_option_papt($this);
         echo '<div class="papev">';
@@ -1320,13 +862,12 @@ class PaperOption implements JsonSerializable {
             && !($extra["no_format_description"] ?? false)) {
             echo $fi->description_preview_html();
         }
-        echo Ht::textarea($this->formid, $reqov->data(), [
+        echo Ht::textarea($this->formid, $reqd, [
                 "id" => $this->readable_formid(),
                 "class" => $pt->control_class($this->formid, "w-text need-autogrow"),
                 "rows" => max($extra["rows"] ?? 1, 1),
                 "cols" => 60,
                 "spellcheck" => ($extra["no_spellcheck"] ?? null ? null : "true"),
-                "readonly" => !$this->test_editable($ov->prow),
                 "data-default-value" => $default_value
             ]),
             "</div></div>\n\n";
@@ -1343,6 +884,10 @@ class PaperOption implements JsonSerializable {
 
     function validate_document(DocumentInfo $doc) {
         return true;
+    }
+
+    /** @param FieldChangeSet $fcs */
+    function strip_unchanged_qreq(PaperInfo $prow, Qrequest $qreq, $fcs) {
     }
 
     /** @param list<DocumentInfo|int> $docids */
@@ -1367,10 +912,18 @@ class PaperOption implements JsonSerializable {
         $prow->mark_inactive_documents();
     }
 
+    /** @return bool */
+    function on_form() {
+        return ($this->render_contexts & FieldRender::CFFORM) !== 0;
+    }
+    /** @return bool */
+    function on_page() {
+        return ($this->render_contexts & FieldRender::CFPAGE) !== 0;
+    }
     /** @param int $context
      * @return bool */
-    function can_render($context) {
-        return ($context & $this->render_contexts) !== 0;
+    function on_render_context($context) {
+        return ($this->render_contexts & $context) !== 0;
     }
 
     function render(FieldRender $fr, PaperValue $ov) {
@@ -1392,6 +945,15 @@ class PaperOption implements JsonSerializable {
         return new SearchExample(
             $this, "has:" . $this->search_keyword(),
             "<0>submission’s {title} field is set"
+        );
+    }
+    /** @return SearchExample */
+    function text_search_example() {
+        assert($this->search_keyword() !== false);
+        return new SearchExample(
+            $this, $this->search_keyword() . ":{text}",
+            "<0>submission’s {title} field contains ‘{text}’",
+            new FmtArg("text", "words")
         );
     }
     /** @return ?SearchTerm */
@@ -1485,7 +1047,7 @@ class Separator_PaperOption extends PaperOption {
         if (($h = $pt->edit_title_html($this))) {
             echo '<h3 class="pfehead">', $h, '</h3>';
         }
-        $pt->print_field_hint($this, null);
+        $pt->print_field_description($this);
         echo '</div>';
     }
 }
@@ -1496,10 +1058,10 @@ class Checkbox_PaperOption extends PaperOption {
     }
 
     function value_compare($av, $bv) {
-        return ($bv && $bv->value ? 1 : 0) - ($av && $av->value ? 1 : 0);
+        return ($av && $av->value ? 1 : 0) <=> ($bv && $bv->value ? 1 : 0);
     }
 
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return $ov->value ? true : false;
     }
 
@@ -1517,8 +1079,7 @@ class Checkbox_PaperOption extends PaperOption {
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         $cb = Ht::checkbox($this->formid, 1, !!$reqov->value, [
             "id" => $this->readable_formid(),
-            "data-default-checked" => !!$ov->value,
-            "disabled" => !$this->test_editable($ov->prow)
+            "data-default-checked" => !!$ov->value
         ]);
         $pt->print_editable_option_papt($this,
             '<span class="checkc">' . $cb . '</span>' . $pt->edit_title_html($this),
@@ -1527,11 +1088,13 @@ class Checkbox_PaperOption extends PaperOption {
     }
 
     function render(FieldRender $fr, PaperValue $ov) {
-        if ($fr->for_page() && $ov->value) {
-            $fr->title = "";
-            $fr->set_html('✓ <span class="pavfn">' . $this->title_html() . '</span>');
-        } else {
+        if ($ov->value || $fr->verbose()) {
             $fr->set_bool(!!$ov->value);
+            if ($fr->want(FieldRender::CFPAGE)) {
+                $fr->title = "";
+                $th = $this->title_html();
+                $fr->set_html($fr->value_html() . " <span class=\"pavfn\">{$th}</span>");
+            }
         }
     }
 
@@ -1637,12 +1200,6 @@ class Selector_PaperOption extends PaperOption {
         $this->assign_values($args->values ?? /* XXX */ $args->selector ?? [], $args->ids ?? null);
     }
 
-    /** @return list<string>
-     * @deprecated */
-    function selector_options() {
-        return $this->values();
-    }
-
     function jsonSerialize() {
         $j = parent::jsonSerialize();
         $j->values = $this->values();
@@ -1660,7 +1217,7 @@ class Selector_PaperOption extends PaperOption {
     function value_compare($av, $bv) {
         return PaperOption::basic_value_compare($av, $bv);
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return $this->values[$ov->value - 1] ?? null;
     }
 
@@ -1702,7 +1259,6 @@ class Selector_PaperOption extends PaperOption {
             ? ["for" => $this->readable_formid()]
             : ["id" => $this->readable_formid(), "for" => false]);
         echo '<div class="papev">';
-        $readonly = !$this->test_editable($ov->prow);
         if ($this->type === "dropdown") {
             $sel = [];
             if (!$ov->value) {
@@ -1714,15 +1270,13 @@ class Selector_PaperOption extends PaperOption {
             }
             echo Ht::select($this->formid, $sel, $reqov->value,
                 ["id" => $this->readable_formid(),
-                 "data-default-value" => $ov->value ?? 0,
-                 "disabled" => $readonly]);
+                 "data-default-value" => $ov->value ?? 0]);
         } else {
             foreach ($this->values() as $i => $s) {
                 if ($s !== null) {
                     echo '<div class="checki"><label><span class="checkc">',
                         Ht::radio($this->formid, $i + 1, $i + 1 == $reqov->value,
-                            ["data-default-checked" => $i + 1 == $ov->value,
-                             "disabled" => $readonly]),
+                            ["data-default-checked" => $i + 1 == $ov->value]),
                         '</span>', htmlspecialchars($s), '</label></div>';
                 }
             }
@@ -1771,14 +1325,17 @@ class Selector_PaperOption extends PaperOption {
     function value_script_expression() {
         return $this->present_script_expression();
     }
+
+    function parse_fexpr(FormulaCall $fcall, &$t) {
+        $fex = new OptionValue_Fexpr($this);
+        $fex->set_format(Fexpr::FSUBFIELD, $this);
+        return $fex;
+    }
 }
 
 class Document_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
-        if ($this->id === DTYPE_SUBMISSION && !$conf->opt("noPapers")) {
-            $this->set_required(true);
-        }
     }
 
     function is_document() {
@@ -1795,7 +1352,8 @@ class Document_PaperOption extends PaperOption {
         } else if ($this->type === "slides") {
             return [Mimetype::checked_lookup(".pdf"),
                     Mimetype::checked_lookup(".ppt"),
-                    Mimetype::checked_lookup(".pptx")];
+                    Mimetype::checked_lookup(".pptx"),
+                    Mimetype::checked_lookup(".key")];
         } else if ($this->type === "video") {
             return [Mimetype::checked_lookup(".mp4"),
                     Mimetype::checked_lookup(".avi")];
@@ -1820,8 +1378,8 @@ class Document_PaperOption extends PaperOption {
         return ($ov->value ?? 0) > 1 || $ov->value === PaperValue::NEWDOC_VALUE;
     }
     function value_compare($av, $bv) {
-        return (int) ($bv && $this->value_present($bv))
-            <=> (int) ($av && $this->value_present($av));
+        return (int) ($av && $this->value_present($av))
+            <=> (int) ($bv && $this->value_present($bv));
     }
     function value_dids(PaperValue $ov) {
         if (($ov->value ?? 0) > 1) {
@@ -1831,25 +1389,14 @@ class Document_PaperOption extends PaperOption {
             return [];
         }
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         if (!$this->value_present($ov)) {
             return null;
-        } else if (($doc = $ps->document_to_json($this, $ov->value))) {
-            return $doc;
-        } else {
-            return false;
         }
+        return $pex->document_json($ov->document(0)) ?? false;
     }
     function value_check(PaperValue $ov, Contact $user) {
-        if ($this->test_required($ov->prow)
-            && !$this->value_present($ov)
-            && !$ov->prow->allow_absent()) {
-            if ($this->id === DTYPE_SUBMISSION) {
-                $ov->msg($this->conf->_("<0>Entry required to complete submission"), MessageSet::WARNING_NOTE);
-            } else {
-                $ov->error("<0>Entry required");
-            }
-        }
+        parent::value_check($ov, $user);
         if ($this->value_present($ov)
             && ($doc = $ov->document(0))
             && $doc->mimetype === "application/pdf"
@@ -1874,8 +1421,8 @@ class Document_PaperOption extends PaperOption {
     }
     function value_save(PaperValue $ov, PaperStatus $ps) {
         if ($this->id === DTYPE_SUBMISSION || $this->id === DTYPE_FINAL) {
-            $ps->save_paperf($this->id ? "finalPaperStorageId" : "paperStorageId", $ov->value ?? 0);
             $ps->change_at($this);
+            $ov->prow->set_prop($this->id ? "finalPaperStorageId" : "paperStorageId", $ov->value ?? 0);
             return true;
         } else {
             return false;
@@ -1889,7 +1436,7 @@ class Document_PaperOption extends PaperOption {
             $ov->set_anno("document", $doc);
             if ($doc->has_error()) {
                 foreach ($doc->message_list() as $mi) {
-                    $ov->message_set()->append_item($mi->with_landmark($doc->export_filename()));
+                    $ov->message_set()->append_item($mi->with_landmark($doc->error_filename()));
                 }
             }
             return $ov;
@@ -1916,35 +1463,25 @@ class Document_PaperOption extends PaperOption {
         }
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        if ($this->id === DTYPE_SUBMISSION || $this->id === DTYPE_FINAL) {
-            $noPapers = $this->conf->opt("noPapers");
-            if ($noPapers === 1
-                || $noPapers === true
-                || ($this->id === DTYPE_FINAL) !== $pt->user->allow_edit_final_paper($ov->prow)) {
-                return;
-            }
-        } else {
-            $noPapers = false;
+        if (($this->id === DTYPE_SUBMISSION || $this->id === DTYPE_FINAL)
+            && ($this->id === DTYPE_FINAL) !== ($pt->user->edit_paper_state($ov->prow) === 2)
+            && !$pt->settings_mode) {
+            return;
         }
 
-        // XXXX this is super gross
-        if ($this->id > 0 && $ov->value) {
-            $docid = $ov->value;
-        } else if ($this->id === DTYPE_SUBMISSION
-                   && $ov->prow->paperStorageId > 1) {
-            $docid = $ov->prow->paperStorageId;
-        } else if ($this->id === DTYPE_FINAL
-                   && $ov->prow->finalPaperStorageId > 0) {
-            $docid = $ov->prow->finalPaperStorageId;
-        } else {
-            $docid = 0;
-        }
-        $doc = null;
-        if ($docid > 1 && $pt->user->can_view_pdf($ov->prow)) {
-            $doc = $ov->prow->document($this->id, $docid, true);
+        // XXX
+        if ($this->id === DTYPE_SUBMISSION) {
+            assert(($ov->value ?? 0) === ($ov->prow->paperStorageId > 1 ? $ov->prow->paperStorageId : 0));
+        } else if ($this->id === DTYPE_FINAL) {
+            assert(($ov->value ?? 0) === ($ov->prow->finalPaperStorageId > 1 ? $ov->prow->finalPaperStorageId : 0));
         }
 
-        $readonly = !$this->test_editable($ov->prow);
+        if ($ov->value > 1 && $pt->user->can_view_pdf($ov->prow)) {
+            $doc = $ov->document_set(true)->document_by_index(0);
+        } else {
+            $doc = null;
+        }
+
         $max_size = $this->max_size ?? $this->conf->upload_max_filesize(true);
         $fk = $this->field_key();
 
@@ -1961,21 +1498,18 @@ class Document_PaperOption extends PaperOption {
         if (!empty($msgs)) {
             $heading .= ' <span class="n">(' . join(", ", $msgs) . ')</span>';
         }
-        $pt->print_editable_option_papt($this, $heading, ["for" => $doc ? false : "{$fk}:upload", "id" => $this->readable_formid()]);
+        $pt->print_editable_option_papt($this, $heading, ["for" => $doc ? false : "{$fk}:uploader", "id" => $this->readable_formid()]);
 
         echo '<div class="papev has-document" data-dtype="', $this->id,
             '" data-document-name="', $fk, '"';
         if ($doc) {
             echo ' data-docid="', $doc->paperStorageId, '"';
         }
-        if ($mimetypes) {
-            echo ' data-document-accept="', htmlspecialchars(join(",", array_map(function ($m) { return $m->mimetype; }, $mimetypes))), '"';
+        if (($accept = Mimetype::list_accept($mimetypes))) {
+            echo ' data-document-accept="', htmlspecialchars($accept), '"';
         }
         if ($this->max_size > 0) {
             echo ' data-document-max-size="', (int) $this->max_size, '"';
-        }
-        if ($this->id === DTYPE_SUBMISSION && $noPapers) {
-            echo ' data-document-optional="true"';
         }
         echo '>';
 
@@ -1991,21 +1525,22 @@ class Document_PaperOption extends PaperOption {
             }
 
             echo '<div class="document-file">',
+                Ht::hidden($this->formid, $doc->paperStorageId),
                 $doc->link_html(htmlspecialchars($doc->filename ?? $doc->export_filename())),
                 '</div><div class="document-stamps">';
             if (($stamps = PaperTable::pdf_stamps_html($doc))) {
                 echo $stamps;
             }
             echo '</div><div class="document-actions">';
-            if ($this->id > 0 && !$readonly) {
-                echo '<a href="" class="ui js-remove-document document-action">Delete</a>';
+            if ($this->id > 0) {
+                echo '<button type="button" class="link ui js-remove-document">Delete</button>';
             }
             if ($has_cf && $pt->cf->allow_recheck()) {
-                echo '<a href="" class="ui js-check-format document-action">',
+                echo '<button type="button" class="link ui js-check-format">',
                     ($pt->cf->need_recheck() ? "Check format" : "Recheck format"),
-                    '</a>';
+                    '</button>';
             } else if ($has_cf && !$pt->cf->has_problem()) {
-                echo '<span class="document-action js-check-format dim">Format OK</span>';
+                echo '<span class="js-check-format dim">Format OK</span>';
             }
             echo '</div>';
             if ($has_cf) {
@@ -2017,12 +1552,8 @@ class Document_PaperOption extends PaperOption {
             }
         }
 
-        if (!$readonly) {
-            echo '<div class="document-replacer">', Ht::button($doc ? "Replace" : "Upload", ["class" => "ui js-replace-document", "id" => "{$fk}:upload"]), '</div>';
-        } else if (!$doc) {
-            echo '<p>(No upload)</p>';
-        }
-        echo "</div></div>\n\n";
+        echo '<div class="document-replacer">', Ht::button($doc ? "Replace" : "Upload", ["class" => "ui js-replace-document", "id" => "{$fk}:uploader"]), '</div>',
+            "</div></div>\n\n";
     }
 
     function validate_document(DocumentInfo $doc) {
@@ -2031,7 +1562,7 @@ class Document_PaperOption extends PaperOption {
             return true;
         }
         for ($i = 0; $i < count($mimetypes); ++$i) {
-            if ($mimetypes[$i]->mimetype === $doc->mimetype)
+            if ($mimetypes[$i]->matches($doc->mimetype))
                 return true;
         }
         $desc = Mimetype::list_description($mimetypes);
@@ -2040,24 +1571,49 @@ class Document_PaperOption extends PaperOption {
         return false;
     }
 
+    /** @param ?DocumentInfo $d */
+    static function render_document(FieldRender $fr, PaperOption $opt, $d) {
+        if (!$d) {
+            if ($fr->verbose()) {
+                $fr->set_text("None");
+            }
+            return;
+        }
+        if ($fr->want(FieldRender::CFFORM)) {
+            $fr->set_html($d->link_html(htmlspecialchars($d->filename ?? ""), 0));
+        } else if ($fr->want(FieldRender::CFPAGE)) {
+            $th = $opt->title_html();
+            $dif = $opt->display() === PaperOption::DISP_TOP ? 0 : DocumentInfo::L_SMALL;
+            $fr->title = "";
+            $fr->set_html($d->link_html("<span class=\"pavfn\">{$th}</span>", $dif));
+        } else {
+            $want_mimetype = $fr->column && $fr->column->has_decoration("type");
+            if ($want_mimetype) {
+                $t = $d->mimetype;
+            } else if (!$fr->want(FieldRender::CFLIST | FieldRender::CFCOLUMN)
+                       || $fr->verbose()) {
+                $t = $d->export_filename();
+            } else {
+                $t = "";
+            }
+            if ($fr->want(FieldRender::CFTEXT) || $want_mimetype) {
+                $fr->set_text($t);
+            } else {
+                $fr->set_html($d->link_html(htmlspecialchars($t), DocumentInfo::L_SMALL | DocumentInfo::L_NOSIZE));
+            }
+        }
+    }
+
     function render(FieldRender $fr, PaperValue $ov) {
-        if ($this->id <= 0 && $fr->for_page()) {
-            if ($this->id == 0) {
+        if ($this->id <= 0 && $fr->want(FieldRender::CFPAGE)) {
+            if ($this->id === 0) {
                 $fr->table->render_submission($fr, $this);
             }
-        } else if (($d = $ov->document(0))) {
-            if ($fr->want_text()) {
-                $fr->set_text($d->filename);
-            } else if ($fr->for_page()) {
-                $fr->title = "";
-                $dif = 0;
-                if ($this->page_order() >= 2000) {
-                    $dif = DocumentInfo::L_SMALL;
-                }
-                $fr->set_html($d->link_html('<span class="pavfn">' . $this->title_html() . '</span>', $dif));
-            } else {
-                $fr->set_html($d->link_html("", DocumentInfo::L_SMALL | DocumentInfo::L_NOSIZE));
+        } else {
+            if ($fr->want(FieldRender::CFFORM)) {
+                $ov->document_set(true);
             }
+            self::render_document($fr, $this, $ov->document(0));
         }
     }
 
@@ -2088,7 +1644,7 @@ class Document_PaperOption extends PaperOption {
         return $this->parse_boolean_search($sword, $srch);
     }
     function present_script_expression() {
-        return ["type" => "document_count", "dtype" => $this->id];
+        return ["type" => "document_count", "formid" => $this->formid, "dtype" => $this->id];
     }
 }
 
@@ -2108,14 +1664,13 @@ class Text_PaperOption extends PaperOption {
     function value_compare($av, $bv) {
         $av = $av ? (string) $av->data() : "";
         $bv = $bv ? (string) $bv->data() : "";
-        if ($av !== "" && $bv !== "") {
-            return $this->conf->collator()->compare($av, $bv);
-        } else {
-            return ($bv !== "" ? 1 : 0) - ($av !== "" ? 1 : 0);
+        if ($av === "" || $bv === "") {
+            return ($av === "" ? 1 : 0) <=> ($bv === "" ? 1 : 0);
         }
+        return $this->conf->collator()->compare($av, $bv);
     }
 
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         $x = $ov->data();
         return $x !== "" ? $x : null;
     }
@@ -2140,14 +1695,7 @@ class Text_PaperOption extends PaperOption {
     }
 
     function search_examples(Contact $viewer, $context) {
-        return [
-            $this->has_search_example(),
-            new SearchExample(
-                $this, $this->search_keyword() . ":{text}",
-                "submission’s {title} field contains ‘{text}’",
-                new FmtArg("text", "hello")
-            )
-        ];
+        return [$this->has_search_example(), $this->text_search_example()];
     }
     function parse_search(SearchWord $sword, PaperSearch $srch) {
         if ($sword->compar === "") {
@@ -2176,226 +1724,9 @@ class Text_PaperOption extends PaperOption {
     }
 }
 
-class Attachments_PaperOption extends PaperOption {
-    function __construct(Conf $conf, $args) {
-        parent::__construct($conf, $args, "prefer-row");
-    }
-
-    function has_document() {
-        return true;
-    }
-    function has_attachments() {
-        return true;
-    }
-
-    function attachment(PaperValue $ov, $name) {
-        return $ov->document_set()->document_by_filename($name);
-    }
-
-    function value_compare($av, $bv) {
-        return ($av && $av->value_count() ? 1 : 0) - ($bv && $bv->value_count() ? 1 : 0);
-    }
-    function value_dids(PaperValue $ov) {
-        $j = null;
-        foreach ($ov->data_list() as $d) {
-            if ($d !== null && str_starts_with($d, "{"))
-                $j = json_decode($d);
-        }
-        if ($j && isset($j->all_dids)) {
-            return $j->all_dids;
-        } else {
-            $values = $ov->value_list();
-            $data = $ov->data_list();
-            array_multisort($data, SORT_NUMERIC, $values);
-            return $values;
-        }
-    }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
-        $attachments = [];
-        foreach ($ov->documents() as $doc) {
-            if (($doc = $ps->document_to_json($this, $doc)))
-                $attachments[] = $doc;
-        }
-        return empty($attachments) ? null : $attachments;
-    }
-    function value_store(PaperValue $ov, PaperStatus $ps) {
-        $dids = $ov->anno("dids") ?? [];
-        '@phan-var list<int> $dids';
-        $fups = $ov->anno("documents") ?? [];
-        '@phan-var list<object> $fups';
-        foreach ($fups as $fup) {
-            if (($doc = $ps->upload_document($fup, $this))) {
-                $dids[] = $doc->paperStorageId;
-            }
-        }
-        if (empty($dids)) {
-            $ov->set_value_data([], []);
-        } else if (count($dids) == 1) {
-            $ov->set_value_data([$dids[0]], [null]);
-        } else {
-            // Put the ordered document IDs in the first option’s sort data.
-            // This is so (1) the link from option -> PaperStorage is visible
-            // directly via PaperOption.value, (2) we can still support
-            // duplicate uploads.
-            $uniqdids = array_values(array_unique($dids, SORT_NUMERIC));
-            $datas = array_fill(0, count($uniqdids), null);
-            $datas[0] = json_encode(["all_dids" => $dids]);
-            $ov->set_value_data($uniqdids, $datas);
-        }
-    }
-
-    function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
-        $ov = PaperValue::make($prow, $this, -1);
-        foreach ($this->value_dids($prow->force_option($this)) as $i => $did) {
-            if (!isset($qreq["{$this->formid}_{$did}_{$i}:remove"])) {
-                $ov->push_anno("dids", $did);
-            }
-        }
-        for ($i = 1; isset($qreq["has_{$this->formid}_new_$i"]); ++$i) {
-            if (($doc = DocumentInfo::make_request($qreq, "{$this->formid}_new_$i", $prow->paperId, $this->id, $this->conf))) {
-                if ($doc->has_error()) {
-                    foreach ($doc->message_list() as $mi) {
-                        $ov->message_set()->append_item($mi->with_landmark($doc->export_filename()));
-                    }
-                }
-                $ov->push_anno("documents", $doc);
-            }
-        }
-        return $ov;
-    }
-    function parse_json(PaperInfo $prow, $j) {
-        if ($j === false) {
-            return PaperValue::make($prow, $this);
-        } else if ($j === null) {
-            return null;
-        } else {
-            $ja = is_array($j) ? $j : [$j];
-            $ov = PaperValue::make($prow, $this, -1);
-            $ov->set_anno("documents", $ja);
-            foreach ($ja as $docj) {
-                if (is_object($docj) && isset($docj->error_html)) {
-                    $ov->error("<5>" . $docj->error_html);
-                } else if (!DocumentInfo::check_json_upload($docj)) {
-                    $ov->estop("<0>Format error");
-                }
-            }
-            return $ov;
-        }
-    }
-    function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        // XXX does not consider $reqov
-        $max_size = $this->max_size ?? $this->conf->upload_max_filesize(true);
-        $title = $this->title_html();
-        if ($max_size > 0) {
-            $title .= ' <span class="n">(max ' . unparse_byte_size($max_size) . ' per file)</span>';
-        }
-        $pt->print_editable_option_papt($this, $title, ["id" => $this->readable_formid(), "for" => false]);
-        echo '<div class="papev has-editable-attachments" data-document-prefix="', $this->formid, '" data-dtype="', $this->id, '" id="', $this->formid, ':attachments"';
-        if ($this->max_size > 0) {
-            echo ' data-document-max-size="', (int) $this->max_size, '"';
-        }
-        echo '>';
-        $readonly = !$this->test_editable($ov->prow);
-        foreach ($ov->document_set() as $i => $doc) {
-            $oname = "{$this->formid}_{$doc->paperStorageId}_{$i}";
-            echo '<div class="has-document" data-dtype="', $this->id,
-                '" data-document-name="', $oname, '"><div class="document-file">',
-                $doc->link_html(htmlspecialchars($doc->member_filename())),
-                '</div><div class="document-stamps">';
-            if (($stamps = PaperTable::pdf_stamps_html($doc))) {
-                echo $stamps;
-            }
-            echo '</div>';
-            if (!$readonly) {
-                echo '<div class="document-actions">', Ht::link("Delete", "", ["class" => "ui js-remove-document document-action"]), '</div>';
-            }
-            echo '</div>';
-        }
-        echo '</div>';
-        if (!$readonly) {
-            echo Ht::button("Add attachment", ["class" => "ui js-add-attachment", "data-editable-attachments" => "{$this->formid}:attachments"]);
-        } else if ($ov->document_set()->is_empty()) {
-            echo '<p>(No uploads)</p>';
-        }
-        echo "</div>\n\n";
-    }
-
-    function render(FieldRender $fr, PaperValue $ov) {
-        $ts = [];
-        foreach ($ov->document_set() as $d) {
-            if ($fr->want_text()) {
-                $ts[] = $d->member_filename();
-            } else {
-                $linkname = htmlspecialchars($d->member_filename());
-                if ($fr->want_list()) {
-                    $dif = DocumentInfo::L_SMALL | DocumentInfo::L_NOSIZE;
-                } else if ($this->page_order() >= 2000) {
-                    $dif = DocumentInfo::L_SMALL;
-                } else {
-                    $dif = 0;
-                    $linkname = '<span class="pavfn">' . $this->title_html() . '</span>/' . $linkname;
-                }
-                $t = $d->link_html($linkname, $dif);
-                if ($d->is_archive()) {
-                    $t = '<span class="archive foldc"><a href="" class="ui js-expand-archive q">' . expander(null, 0) . '</a> ' . $t . '</span>';
-                }
-                $ts[] = $t;
-            }
-        }
-        if (!empty($ts)) {
-            if ($fr->want_text()) {
-                $fr->set_text(join("; ", $ts));
-            } else if ($fr->want_list_row()) {
-                $fr->set_html(join("; ", $ts));
-            } else {
-                $fr->set_html('<ul class="x"><li class="od">' . join('</li><li class="od">', $ts) . '</li></ul>');
-            }
-            if ($fr->for_page() && $this->page_order() < 2000) {
-                $fr->title = false;
-                $v = '';
-                if ($fr->table && $fr->user->view_option_state($ov->prow, $this) === 1) {
-                    $v = ' fx8';
-                }
-                $fr->value = "<div class=\"pgsm{$v}\">{$fr->value}</div>";
-            }
-        } else if ($fr->verbose()) {
-            $fr->set_text("None");
-        }
-    }
-
-    function search_examples(Contact $viewer, $context) {
-        return [
-            $this->has_search_example(),
-            new SearchExample(
-                $this, $this->search_keyword() . ":{comparator}",
-                "<0>submission has three or more {title} attachments",
-                new FmtArg("comparator", ">2")
-            ),
-            new SearchExample(
-                $this, $this->search_keyword() . ":\"{filename}\"",
-                "<0>submission has {title} attachment matching “{filename}”",
-                new FmtArg("filename", "*.gif")
-            )
-        ];
-    }
-    function parse_search(SearchWord $sword, PaperSearch $srch) {
-        if (preg_match('/\A[-+]?\d+\z/', $sword->cword)) {
-            return new DocumentCount_SearchTerm($srch->user, $this, $sword->compar, (int) $sword->cword);
-        } else if ($sword->compar === "" || $sword->compar === "!=") {
-            return new DocumentName_SearchTerm($srch->user, $this, $sword->compar !== "!=", $sword->cword);
-        } else {
-            return null;
-        }
-    }
-    function present_script_expression() {
-        return ["type" => "document_count", "dtype" => $this->id];
-    }
-}
-
 class Unknown_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
         $args->type = "none";
-        $args->form_order = $args->page_order = false;
         parent::__construct($conf, $args, "hidden");
     }
 }

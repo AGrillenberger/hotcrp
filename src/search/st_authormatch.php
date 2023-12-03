@@ -60,15 +60,17 @@ class AuthorMatch_SearchTerm extends SearchTerm {
         }
         return false;
     }
-    function configure_search($top, PaperSearch $srch) {
-        if ($this->type !== "comatch") {
-            $srch->add_field_highlighter("au", $this->matcher->general_pregexes());
-        }
-        if ($this->type !== "aumatch") {
-            $srch->add_field_highlighter("co", $this->matcher->general_pregexes());
+    function prepare_visit($param, PaperSearch $srch) {
+        if ($param->want_field_highlighter()) {
+            if ($this->type !== "comatch") {
+                $srch->add_field_highlighter("au", $this->matcher->general_pregexes());
+            }
+            if ($this->type !== "aumatch") {
+                $srch->add_field_highlighter("co", $this->matcher->general_pregexes());
+            }
         }
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

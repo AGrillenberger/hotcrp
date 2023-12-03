@@ -12,7 +12,11 @@ class Administrator_PaperColumn extends PaperColumn {
         return parent::add_user_sort_decoration($decor) || parent::add_decoration($decor);
     }
     function prepare(PaperList $pl, $visible) {
-        return $pl->user->can_view_manager(null);
+        if (!$pl->user->can_view_manager(null)) {
+            return false;
+        }
+        $pl->conf->pc_set(); // prepare cache
+        return true;
     }
     static private function cid(PaperList $pl, PaperInfo $row) {
         if ($row->managerContactId && $pl->user->can_view_manager($row)) {
@@ -25,15 +29,15 @@ class Administrator_PaperColumn extends PaperColumn {
         $this->ianno = Contact::parse_sortspec($pl->conf, $this->decorations);
     }
     function compare(PaperInfo $a, PaperInfo $b, PaperList $pl) {
-        return $pl->_compare_pc(self::cid($pl, $a), self::cid($pl, $b), $this->ianno);
+        return $pl->user_compare(self::cid($pl, $a), self::cid($pl, $b), $this->ianno);
     }
     function content_empty(PaperList $pl, PaperInfo $row) {
         return !self::cid($pl, $row);
     }
     function content(PaperList $pl, PaperInfo $row) {
-        return $pl->_content_pc($row->managerContactId);
+        return $pl->user_content($row->managerContactId, $row);
     }
     function text(PaperList $pl, PaperInfo $row) {
-        return $pl->_text_pc($row->managerContactId);
+        return $pl->user_text($row->managerContactId);
     }
 }

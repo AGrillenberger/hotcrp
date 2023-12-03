@@ -1,6 +1,6 @@
 <?php
 // ht.php -- HotCRP HTML helper functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Ht {
     /** @var string */
@@ -17,8 +17,6 @@ class Ht {
     private static $_stash_inscript = false;
     /** @var array<string,true> */
     private static $_stash_map = [];
-    /** @var ?MessageSet */
-    private static $_msgset = null;
     const ATTR_SKIP = 1;
     const ATTR_BOOL = 2;
     const ATTR_BOOLTEXT = 3;
@@ -53,7 +51,7 @@ class Ht {
         $x = "";
         foreach ($tokens as $t) {
             if (($t ?? "") !== "")
-                $x = $x === "" ? $t : "$x $t";
+                $x = $x === "" ? $t : "{$x} {$t}";
         }
         return $x;
     }
@@ -75,13 +73,13 @@ class Ht {
                     || ($v === "" && $t === self::ATTR_NOEMPTY)) {
                     // nothing
                 } else if ($t === self::ATTR_BOOL) {
-                    $x .= ($v ? " $k" : "");
+                    $x .= ($v ? " {$k}" : "");
                 } else if ($t === self::ATTR_BOOLTEXT && is_bool($v)) {
-                    $x .= " $k=\"" . ($v ? "true" : "false") . "\"";
+                    $x .= " {$k}=\"" . ($v ? "true" : "false") . "\"";
                 } else if ($v === "") {
-                    $x .= " $k";
+                    $x .= " {$k}";
                 } else {
-                    $x .= " $k=\"" . str_replace("\"", "&quot;", $v) . "\"";
+                    $x .= " {$k}=\"" . str_replace("\"", "&quot;", $v) . "\"";
                 }
             }
         }
@@ -124,7 +122,7 @@ class Ht {
      * @return string */
     static function stylesheet_file($src) {
         return "<link rel=\"stylesheet\" type=\"text/css\" href=\""
-            . htmlspecialchars($src) . "\" />";
+            . htmlspecialchars($src) . "\">";
     }
 
     /** @param string|array<string,mixed> $action
@@ -181,7 +179,7 @@ class Ht {
     static function hidden($name, $value = "", $extra = null) {
         return '<input type="hidden" name="' . htmlspecialchars($name)
             . '" value="' . htmlspecialchars($value) . '"'
-            . self::extra($extra) . ' />';
+            . self::extra($extra) . '>';
     }
 
     /** @param string $name
@@ -197,7 +195,8 @@ class Ht {
             unset($js["disabled"]);
         }
 
-        $x = $optgroup = "";
+        $in_optgroup = $declared_optgroup = "";
+        $opts = [];
         $first_value = null;
         $has_selected = false;
         foreach ($opt as $key => $info) {
@@ -213,38 +212,50 @@ class Ht {
             }
 
             if ($info === null) {
-                $x .= '<option label=" " disabled></option>';
-            } else if (($info["type"] ?? null) === "optgroup") {
-                $x .= $optgroup;
-                if ($info["label"] ?? null) {
-                    $x .= '<optgroup label="' . htmlspecialchars($info["label"]) . '">';
-                    $optgroup = "</optgroup>";
-                } else {
-                    $optgroup = "";
-                }
-            } else {
-                $label = $info["label"];
-                unset($info["label"]);
-                $info["value"] = $info["value"] ?? (string) $key;
-                if (!isset($first_value)) {
-                    $first_value = $info["value"];
-                }
-                if ($selected !== null
-                    && strcmp($info["value"], $selected) === 0
-                    && !$has_selected) {
-                    $info["selected"] = true;
-                    $has_selected = true;
-                }
-                $x .= '<option' . self::extra($info) . ">{$label}</option>";
+                $opts[] = '<option label=" " disabled></option>';
+                continue;
             }
+            if (($info["exclude"] ?? false)
+                && strcmp($info["value"] ?? $key, $selected) !== 0) {
+                continue;
+            }
+            if (($info["type"] ?? null) === "optgroup") {
+                $declared_optgroup = $info["label"] ?? "";
+                continue;
+            }
+            $expected_optgroup = $declared_optgroup ? $in_optgroup : "";
+            if (($info["optgroup"] ?? $declared_optgroup) !== $in_optgroup) {
+                $opts[] = $in_optgroup === "" ? "" : "</optgroup>";
+                $in_optgroup = $info["optgroup"] ?? $declared_optgroup;
+                if ($in_optgroup !== "") {
+                    $opts[] = '<optgroup label="' . htmlspecialchars($in_optgroup) . '">';
+                }
+            }
+
+            $label = $info["label"];
+            unset($info["label"], $info["type"], $info["optgroup"], $info["exclude"]);
+            $info["value"] = $info["value"] ?? (string) $key;
+            if (!isset($first_value)) {
+                $first_value = $info["value"];
+            }
+            if ($selected !== null
+                && strcmp($info["value"], $selected) === 0
+                && !$has_selected) {
+                $info["selected"] = true;
+                $has_selected = true;
+            }
+            $opts[] = '<option' . self::extra($info) . ">{$label}</option>";
+        }
+        if ($in_optgroup !== "") {
+            $opts[] = "</optgroup>";
         }
 
-        $t = '<span class="select"><select name="' . $name . '"' . self::extra($js);
+        $jsx = self::extra($js);
         if (!isset($js["data-default-value"])
             && ($has_selected || isset($first_value))) {
-            $t .= ' data-default-value="' . htmlspecialchars($has_selected ? $selected : $first_value) . '"';
+            $jsx .= ' data-default-value="' . htmlspecialchars($has_selected ? $selected : $first_value) . '"';
         }
-        return "{$t}>{$x}{$optgroup}</select></span>";
+        return "<span class=\"select\"><select name=\"{$name}\"{$jsx}>" . join("", $opts) . "</select></span>";
     }
 
     /** @param string $name
@@ -262,7 +273,7 @@ class Ht {
         }
         $js = $js ? : [];
         if (!array_key_exists("id", $js) || $js["id"] === true) {
-            $js["id"] = "htctl" . ++self::$_controlid;
+            $js["id"] = "k-" . ++self::$_controlid;
         }
         '@phan-var array{id:string|false|null} $js';
         if ($js["id"]) {
@@ -270,12 +281,13 @@ class Ht {
         }
         $t = '<input type="checkbox"'; /* NB see Ht::radio */
         if ($name) {
-            $t .= " name=\"$name\" value=\"" . htmlspecialchars((string) $value) . "\"";
+            $v = htmlspecialchars((string) $value);
+            $t .= " name=\"{$name}\" value=\"{$v}\"";
         }
         if ($checked) {
             $t .= " checked";
         }
-        return $t . self::extra($js) . " />";
+        return $t . self::extra($js) . ">";
     }
 
     /** @param string $name
@@ -357,11 +369,11 @@ class Ht {
     }
 
     private static function apply_placeholder(&$value, &$js) {
-        if ($value === null || $value === ($js["placeholder"] ?? null)) {
+        if ($value === null || $value == ($js["placeholder"] ?? null)) {
             $value = "";
         }
         if (($default = $js["data-default-value"] ?? null) !== null
-            && $value === $default) {
+            && $value == $default) {
             unset($js["data-default-value"]);
         }
     }
@@ -686,18 +698,14 @@ class Ht {
     /** @param string $msg
      * @param int $status */
     static function msg($msg, $status) {
-        if (is_int($status)) {
-            if ($status >= 2) {
-                $status = "error";
-            } else if ($status > 0) {
-                $status = "warning";
-            } else if ($status === -3) {
-                $status = "confirm";
-            } else {
-                $status = "info";
-            }
+        assert(is_int($status));
+        if ($status >= 2 || $status === -1 /* MessageSet::URGENT_NOTE */) {
+            $status = "error";
+        } else if ($status > 0 || $status === -2 /* MessageSet::WARNING_NOTE */) {
+            $status = "warning";
+        } else if ($status === -3 /* MessageSet::SUCCESS */) {
+            $status = "confirm";
         } else {
-            error_log("not a string " . var_export($status, true) . ": " . debug_string_backtrace());
             $status = "info";
         }
         $mx = "";
@@ -725,7 +733,9 @@ class Ht {
             if ($ml instanceof MessageItem) {
                 $mlx[] = $ml;
             } else if ($ml instanceof MessageSet) {
-                array_push($mlx, ...$ml->message_list());
+                if ($ml->has_message()) { // old PHPs require at least 2 args
+                    array_push($mlx, ...$ml->message_list());
+                }
             } else {
                 foreach ($ml as $mi) {
                     $mlx[] = $mi;
@@ -744,45 +754,5 @@ class Ht {
     static function feedback_msg(...$mls) {
         $ms = self::feedback_msg_content(...$mls);
         return $ms[0] === "" ? "" : self::msg($ms[0], $ms[1]);
-    }
-
-
-    /** @param string $field
-     * @deprecated */
-    static function control_class($field, $rest = "", $prefix = "has-") {
-        if (self::$_msgset) {
-            return self::$_msgset->control_class($field, $rest, $prefix);
-        } else {
-            return $rest;
-        }
-    }
-    /** @return MessageSet
-     * @deprecated */
-    static function message_set() {
-        self::$_msgset || (self::$_msgset = new MessageSet);
-        return self::$_msgset;
-    }
-    /** @param string $field
-     * @deprecated
-     * @suppress PhanDeprecatedFunction */
-    static function error_at($field, $msg = "") {
-        self::message_set()->error_at($field, $msg);
-    }
-    /** @param string $field
-     * @deprecated
-     * @suppress PhanDeprecatedFunction */
-    static function warning_at($field, $msg = "") {
-        self::message_set()->warning_at($field, $msg);
-    }
-    /** @param string $field
-     * @deprecated */
-    static function problem_status_at($field) {
-        return self::$_msgset ? self::$_msgset->problem_status_at($field) : 0;
-    }
-    /** @param string $field
-     * @return string
-     * @deprecated */
-    static function feedback_html_at($field) {
-        return self::$_msgset ? self::$_msgset->feedback_html_at($field) : "";
     }
 }

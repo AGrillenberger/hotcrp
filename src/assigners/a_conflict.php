@@ -1,6 +1,6 @@
 <?php
 // a_conflict.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Conflict_Assignable extends Assignable {
     /** @var int */
@@ -70,7 +70,7 @@ class Conflict_AssignmentParser extends AssignmentParser {
             $x = strtolower(substr($req["conflict"], 0, $pos));
             if (in_array($x, ["", "any", "all", "y", "yes", "conflict", "conflicted"])) {
                 return new CountMatcher(">" . CONFLICT_MAXUNCONFLICTED);
-            } else if (($ct = $conf->conflict_types()->parse_assignment($x, 0)) !== false) {
+            } else if (($ct = $conf->conflict_set()->parse_assignment($x, 0)) !== false) {
                 return new CountMatcher("=" . $ct);
             } else {
                 return null;
@@ -119,7 +119,7 @@ class Conflict_AssignmentParser extends AssignmentParser {
                     $ct = $old_ct_na;
                 }
             } else {
-                $ct = $state->conf->conflict_types()->parse_assignment($text, $old_ct_na);
+                $ct = $state->conf->conflict_set()->parse_assignment($text, $old_ct_na);
             }
             if ($ct === false || Conflict::is_author($ct)) {
                 return new AssignmentError("Bad conflict type “{$text}”.");
@@ -160,7 +160,7 @@ class Conflict_Assigner extends Assigner {
                     ++$ncontacts;
             }
             if ($ncontacts === 0) {
-                throw new AssignmentError("<0>Each submission must have at least one contact.");
+                throw new AssignmentError("<0>Each submission must have at least one contact");
             }
         }
         return new Conflict_Assigner($item, $state);
@@ -192,8 +192,7 @@ class Conflict_Assigner extends Assigner {
             $state->msg_near($item->landmark, "<0>Overriding conflict for #{$pid} {$type} assignment {$uname}", 1);
         } else if ($has_conflict) {
             $state->msg_near($item->landmark, "<0>{$uname} cannot {$type} #{$pid} because they are conflicted", 2);
-            if (($state->flags & AssignmentState::FLAG_CSV_CONTEXT) !== 0
-                && $state->user->allow_administer($prow)) {
+            if ($state->csv_context && $state->user->allow_administer($prow)) {
                 $state->msg_near($item->landmark, "<0>Set an “override” column to “yes” to force this assignment.", MessageSet::INFORM);
             }
             throw new AssignmentError("");
@@ -203,7 +202,7 @@ class Conflict_Assigner extends Assigner {
                 $state->msg_near($item->landmark, "<5>" . $potconf->render_ul_item(null, null, $msglist), MessageSet::INFORM);
             }
             if ($state->potential_conflict_warnings < 1) {
-                $state->msg_near($item->landmark, "<5>You may want to <a href=\"" . $state->conf->hoturl("conflictassign") . "\" target=\"_blank\">confirm potential conflicts</a> before proceeding further.", MessageSet::INFORM);
+                $state->msg_near($item->landmark, "<5>You may want to <a href=\"" . $state->conf->hoturl("conflictassign") . "\" target=\"_blank\" rel=\"noopener\">confirm potential conflicts</a> before proceeding further.", MessageSet::INFORM);
                 ++$state->potential_conflict_warnings;
             }
         }
@@ -241,7 +240,7 @@ class Conflict_Assigner extends Assigner {
                 "action" => "conflict",
                 "email" => $this->contact->email,
                 "name" => $this->contact->name(),
-                "conflict" => $aset->conf->conflict_types()->unparse_assignment(Conflict::pc_part($this->ctype))
+                "conflict" => $aset->conf->conflict_set()->unparse_assignment(Conflict::pc_part($this->ctype))
             ]);
         }
         if (($old_ct ^ $this->ctype) & CONFLICT_CONTACTAUTHOR) {

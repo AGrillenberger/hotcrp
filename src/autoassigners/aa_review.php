@@ -9,10 +9,16 @@ class Review_Autoassigner extends Autoassigner {
     private $count;
     /** @var 1|2|3 */
     private $kind;
+    /** @var 1|2|3 */
+    private $load;
 
     const KIND_ENSURE = 1;
     const KIND_ADD = 2;
     const KIND_PER_USER = 3;
+
+    const LOAD_ALL = 1;
+    const LOAD_RTYPE = 2;
+    const LOAD_ROUND = 3;
 
     /** @param ?list<int> $pcids
      * @param list<int> $papersel
@@ -37,14 +43,24 @@ class Review_Autoassigner extends Autoassigner {
                 $this->set_assignment_column("round", $round);
             }
         }
-        $this->set_assignment_column("preference", new AutoassignerComputed);
-        $this->set_assignment_column("topic_score", new AutoassignerComputed);
+        $this->set_computed_assignment_column("preference");
+        $this->set_computed_assignment_column("topic_score");
+
+        $t = $subreq["load"] ?? "all";
+        if ($t === "all") {
+            $this->load = self::LOAD_ALL;
+        } else if ($t === "rtype") {
+            $this->load = self::LOAD_RTYPE;
+        } else if ($t === "round") {
+            $this->load = self::LOAD_ROUND;
+        }
 
         $this->extract_balance_method($subreq);
+        $this->extract_max_load($subreq);
 
         $n = $subreq["count"] ?? $gj->count ?? 1;
         if (is_string($n)) {
-            $n = cvtint($n);
+            $n = stoi($n) ?? -1;
         }
         if (!is_int($n) || $n <= 0) {
             $this->error_at("count", "<0>Count should be a positive number");
@@ -68,27 +84,33 @@ class Review_Autoassigner extends Autoassigner {
         return parent::incompletely_assigned_paper_ids();
     }
 
-    private function balance_reviews() {
+    private function set_load() {
         $q = "select contactId, count(reviewId) from PaperReview where contactId?a";
-        if ($this->rtype > 0) {
+        if ($this->load === self::LOAD_RTYPE) {
             $q .= " and reviewType={$this->rtype}";
         } else {
-            $q .= " and reviewType>0";
+            $q .= " and (reviewType!=" . REVIEW_PC . " or requestedBy!=contactId)";
+        }
+        if ($this->load === self::LOAD_ROUND) {
+            $rname = $this->assignment_column("round")
+                ?? $this->conf->assignment_round_option($this->rtype === REVIEW_EXTERNAL);
+            $round = $this->conf->round_number($rname);
+            if ($round !== null) {
+                $q .= " and reviewRound={$round}";
+            } else {
+                $q .= " and false";
+            }
         }
         $result = $this->conf->qe($q . " group by contactId", $this->user_ids());
         while (($row = $result->fetch_row())) {
-            $this->set_aauser_load((int) $row[0], (int) $row[1]);
+            $this->add_aauser_load((int) $row[0], (int) $row[1]);
         }
         Dbl::free($result);
     }
 
     function run() {
         $this->load_review_preferences($this->rtype);
-
-        if ($this->kind !== self::KIND_PER_USER
-            && $this->balance !== self::BALANCE_NEW) {
-            $this->balance_reviews();
-        }
+        $this->set_load();
 
         $count = $this->count;
         if ($this->kind === self::KIND_PER_USER) {

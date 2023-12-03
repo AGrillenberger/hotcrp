@@ -1,6 +1,6 @@
 <?php
 // listactions/la_get_sub.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class GetCheckFormat_ListAction extends ListAction {
     function run(Contact $user, Qrequest $qreq, SearchSelection $ssel) {
@@ -9,7 +9,7 @@ class GetCheckFormat_ListAction extends ListAction {
             if ($user->can_view_pdf($prow))
                 $papers[$prow->paperId] = $prow;
         }
-        $csvg = $user->conf->make_csvg("formatcheck")->select(["paper", "title", "pages", "format", "messages"]);
+        $csvg = $user->conf->make_csvg("formatcheck")->select(["paper", "title", "pages", "format_status", "format", "messages"]);
         $csvg->export_headers();
         header("Content-Type: " . $csvg->mimetype_with_charset());
         echo $csvg->unparse();
@@ -22,18 +22,21 @@ class GetCheckFormat_ListAction extends ListAction {
                 $pages = $cf->npages ?? "?";
                 $errf = $cf->problem_fields();
                 if (empty($errf)) {
+                    $status = "ok";
                     $format = "ok";
                     $messages = "";
                 } else {
+                    $status = $cf->has_error() ? "error" : "warning";
                     $format = join(" ", $errf);
                     $messages = rtrim($cf->full_feedback_text());
                 }
             } else {
+                $status = "";
                 $pages = "";
                 $format = "notpdf";
                 $messages = "";
             }
-            echo $prow->paperId, ",", CsvGenerator::quote($prow->title), ",", $pages, ",", CsvGenerator::quote($format), ",", CsvGenerator::quote($messages), "\n";
+            echo $prow->paperId, ",", CsvGenerator::quote($prow->title), ",", $pages, ",", $status, ",", CsvGenerator::quote($format), ",", CsvGenerator::quote($messages), "\n";
             ob_flush();
             flush();
         }
@@ -46,24 +49,32 @@ class GetPcconflicts_ListAction extends ListAction {
         return $user->is_manager();
     }
     function run(Contact $user, Qrequest $qreq, SearchSelection $ssel) {
-        $confset = $user->conf->conflict_types();
+        $confset = $user->conf->conflict_set();
         $pcm = $user->conf->pc_members();
         $csvg = $user->conf->make_csvg("pcconflicts")
             ->select(["paper", "title", "first", "last", "email", "conflicttype"]);
         $old_overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
         foreach ($ssel->paper_set($user, ["allConflictType" => 1]) as $prow) {
-            if ($user->can_view_conflicts($prow)) {
-                $m = [];
-                foreach ($prow->conflicts() as $cid => $cflt) {
-                    if (($pc = $pcm[$cid] ?? null) && $cflt->is_conflicted()) {
-                        $m[$pc->pc_index] = [(string) $prow->paperId, $prow->title, $pc->firstName, $pc->lastName, $pc->email, $confset->unparse_text($cflt->conflictType)];
-                    }
-                }
-                if ($m) {
-                    ksort($m);
-                    $csvg->append(array_values($m));
-                }
+            if (!$user->can_view_conflicts($prow)) {
+                continue;
             }
+            $m = [];
+            foreach ($prow->conflict_types() as $uid => $ctype) {
+                if (!($pc = $pcm[$uid] ?? null)
+                    || !Conflict::is_conflicted($ctype)) {
+                    continue;
+                }
+                $m[$pc->pc_index] = [
+                    (string) $prow->paperId,
+                    $prow->title,
+                    $pc->firstName,
+                    $pc->lastName,
+                    $pc->email,
+                    $confset->unparse_text($ctype)
+                ];
+            }
+            ksort($m);
+            $csvg->append(array_values($m));
         }
         $user->set_overrides($old_overrides);
         return $csvg;
@@ -97,8 +108,8 @@ class GetCSV_ListAction extends ListAction {
         assert(!isset($qreq->display));
         $pl = new PaperList("pl", $search, ["sort" => true], $qreq);
         $pl->apply_view_report_default();
-        $pl->apply_view_session();
-        $pl->set_view("sel", false);
+        $pl->apply_view_session($qreq);
+        $pl->set_view("sel", false, PaperList::VIEWORIGIN_MAX);
         list($header, $data) = $pl->text_csv();
         return $user->conf->make_csvg("data", CsvGenerator::FLAG_ITEM_COMMENTS)
             ->set_keys(array_keys($header))->set_header(array_values($header))

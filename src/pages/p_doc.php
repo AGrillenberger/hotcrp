@@ -1,6 +1,6 @@
 <?php
 // pages/doc.php -- HotCRP document download page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Doc_Page {
     /** @param string $status
@@ -21,7 +21,7 @@ class Doc_Page {
                 . (empty($_SERVER["HTTP_REFERER"]) ? "" : " R[" . $_SERVER["HTTP_REFERER"] . "]"));
         }
 
-        header("HTTP/1.1 $status");
+        header("HTTP/1.1 {$status}");
         if (isset($qreq->fn)) {
             json_exit(["ok" => false, "message_list" => $ml]);
         } else {
@@ -36,8 +36,8 @@ class Doc_Page {
      * @return object */
     static private function history_element(DocumentInfo $doc, $active) {
         $pj = ["hash" => $doc->text_hash(), "at" => $doc->timestamp, "mimetype" => $doc->mimetype];
-        if ($active ? $doc->size() : $doc->size) {
-            $pj["size"] = $doc->size;
+        if (($sz = $doc->size()) >= 0) {
+            $pj["size"] = $sz;
         }
         if ($doc->filename) {
             $pj["filename"] = $doc->filename;
@@ -149,7 +149,7 @@ class Doc_Page {
         // check for contents request
         if ($qreq->fn === "listing" || $qreq->fn === "consolidatedlisting") {
             if (!$doc->is_archive()) {
-                json_exit(MessageItem::make_error_json("<0>That file is not an archive"));
+                json_exit(JsonResult::make_error(400, "<0>That file is not an archive"));
             } else if (($listing = $doc->archive_listing(65536)) === null) {
                 $ml = $doc->message_list();
                 if (empty($ml)) {

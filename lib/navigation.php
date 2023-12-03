@@ -1,6 +1,6 @@
 <?php
 // navigation.php -- HotCRP navigation helper functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class NavigationState {
     // Base URL:    PROTOCOL://HOST[:PORT]/BASEPATH/
@@ -105,8 +105,7 @@ class NavigationState {
             }
             if ($pos !== false) {
                 $this->base_path = substr($uri, 0, $pos + 1);
-            } else {
-                error_log("FAJNDFNASJDNASJ");
+            } else { // this should never happen
                 $this->base_path = $uri;
                 if ($uri === "" || $uri[strlen($uri) - 1] !== "/") {
                     $this->base_path .= "/";
@@ -155,21 +154,6 @@ class NavigationState {
         // $this->site_path: initially $this->base_path
         $this->site_path = $this->base_path;
         $this->site_path_relative = $this->base_path_relative;
-
-/*
-        $serverm = ["REQUEST_URI" => $server["REQUEST_URI"],
-            "SCRIPT_FILENAME" => $server["SCRIPT_FILENAME"],
-            "SCRIPT_NAME" => $server["SCRIPT_NAME"]];
-        foreach (["ORIG_SCRIPT_FILENAME", "ORIG_SCRIPT_NAME", "PATH_INFO"] as $k) {
-            if (array_key_exists($k, $server))
-                $serverm[$k] = $server[$k];
-        }
-        $serverm["~BASE_PATH"] = $this->base_path;
-        $serverm["~PAGE"] = $this->page;
-        $serverm["~PATH"] = $this->path;
-        $serverfx = $this->server . $this->request_uri . " " . substr(json_encode($serverm, JSON_PRETTY_PRINT), 0, -1) . "\n";
-        file_put_contents("/tmp/check.txt", $serverfx);
-        if (defined("STDERR")) { fwrite(STDERR, $serverfx); } */
     }
 
     /** @param string $uri
@@ -438,125 +422,17 @@ class Navigation {
     /** @var ?NavigationState */
     static private $s;
 
-    static function analyze() {
-        if (PHP_SAPI !== "cli") {
-            self::$s = new NavigationState($_SERVER);
-        } else {
-            self::$s = new NavigationState(null);
-        }
-    }
-
     /** @return NavigationState */
     static function get() {
+        if (!self::$s) {
+            self::$s = new NavigationState(PHP_SAPI !== "cli" ? $_SERVER : null);
+        }
         return self::$s;
     }
 
     /** @return string */
     static function self() {
-        return self::$s->self();
-    }
-
-    /** @return string */
-    static function host() {
-        return self::$s->host;
-    }
-
-    /** @param bool $downcase_host
-     * @return string */
-    static function site_absolute($downcase_host = false) {
-        return self::$s->site_absolute($downcase_host);
-    }
-
-    /** @param bool $downcase_host
-     * @return string */
-    static function base_absolute($downcase_host = false) {
-        return self::$s->base_absolute($downcase_host);
-    }
-
-    /** @return string */
-    static function site_path() {
-        return self::$s->site_path;
-    }
-
-    /** @return string */
-    static function base_path() {
-        return self::$s->base_path;
-    }
-
-    /** @param ?string $url
-     * @return string */
-    static function siteurl($url = null) {
-        return self::$s->siteurl($url);
-    }
-
-    /** @param ?string $url
-     * @return string */
-    static function siteurl_path($url = null) {
-        return self::$s->siteurl_path($url);
-    }
-
-    /** @param string $url
-     * @return string */
-    static function set_siteurl($url) {
-        return self::$s->set_siteurl($url);
-    }
-
-    /** @return string */
-    static function page() {
-        return self::$s->page;
-    }
-
-    /** @return string */
-    static function path() {
-        return self::$s->path;
-    }
-
-    /** @param int $n
-     * @param bool $decoded
-     * @return ?string */
-    static function path_component($n, $decoded = false) {
-        return self::$s->path_component($n, $decoded);
-    }
-
-    /** @param int $n
-     * @return string */
-    static function path_suffix($n) {
-        return self::$s->path_suffix($n);
-    }
-
-    /** @param int $n
-     * @return ?string */
-    static function shift_path_components($n) {
-        return self::$s->shift_path_components($n);
-    }
-
-    /** @return string */
-    static function shifted_path() {
-        return self::$s->shifted_path;
-    }
-
-    /** @param string $page
-     * @return string */
-    static function set_page($page) {
-        return self::$s->set_page($page);
-    }
-
-    /** @param string $path
-     * @return string */
-    static function set_path($path) {
-        return (self::$s->path = $path);
-    }
-
-    /** @return string */
-    static function php_suffix() {
-        return self::$s->php_suffix;
-    }
-
-    /** @param string $url
-     * @param ?string $siteref
-     * @return string */
-    static function make_absolute($url, $siteref = null) {
-        return self::$s->make_absolute($url, $siteref);
+        return self::get()->self();
     }
 
     /** @param string $url
@@ -577,5 +453,3 @@ class Navigation {
         exit;
     }
 }
-
-Navigation::analyze();

@@ -1,6 +1,6 @@
 <?php
 // pages/p_assign.php -- HotCRP per-paper assignment/conflict management page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Assign_Page {
     /** @var Conf */
@@ -56,7 +56,7 @@ class Assign_Page {
         }
         $round = CsvGenerator::quote(":" . (string) $rname);
 
-        $confset = $this->conf->conflict_types();
+        $confset = $this->conf->conflict_set();
         $acceptable_review_types = [];
         foreach ([0, REVIEW_PC, REVIEW_SECONDARY, REVIEW_PRIMARY, REVIEW_META] as $t) {
             $acceptable_review_types[] = (string) $t;
@@ -108,7 +108,8 @@ class Assign_Page {
             $t[] = "{$prow->paperId},{$revtype},{$user},{$myround}\n";
         }
 
-        $aset = new AssignmentSet($this->user, true);
+        $aset = new AssignmentSet($this->user);
+        $aset->set_override_conflicts(true);
         $aset->enable_papers($this->prow);
         $aset->parse(join("", $t));
         $ok = $aset->execute();
@@ -216,7 +217,7 @@ class Assign_Page {
 
     /** @param ReviewInfo|ReviewRequestInfo|ReviewRefusalInfo $rrow */
     private function print_reqrev_main($rrow, $namex, $time) {
-        $rname = "Review " . ($rrow->reviewStatus > 0 ? " (accepted)" : " (not started)");
+        $rname = $rrow->status_title(true) . " (" . $rrow->status_description() . ")";
         if ($this->user->can_view_review($this->prow, $rrow)) {
             $rname = Ht::link($rname, $this->prow->reviewurl(["r" => $rrow->reviewId]));
         }
@@ -320,29 +321,17 @@ class Assign_Page {
         echo '">';
 
         // create contact-like for identity
-        $rrowid = null;
-        if (isset($rrow->contactId) && $rrow->contactId > 0) {
-            $rrowid = $this->conf->user_by_id($rrow->contactId, USER_SLICE);
-        } else if ($rrow->reviewType === REVIEW_REQUEST) {
-            $rrowid = $this->conf->user_by_email($rrow->email, USER_SLICE);
-        }
-        if ($rrowid === null) {
-            if ($rrow->reviewType === REVIEW_REQUEST) {
-                $rrowid = $rrow->make_user($this->conf);
-            } else {
-                $rrowid = $rrow;
-            }
-        }
+        $rrowid = $rrow->reviewer();
 
         // render name
         $actas = "";
         if (isset($rrow->contactId) && $rrow->contactId > 0) {
             $name = $this->user->reviewer_html_for($rrowid);
-            if ($rrow->contactId != $this->user->contactId
+            if ($rrow->contactId !== $this->user->contactId
                 && $this->user->privChair
                 && $this->user->allow_administer($this->prow)) {
                 $actas = ' ' . Ht::link(Ht::img("viewas.png", "[Act as]", ["title" => "Become user"]),
-                    $this->prow->reviewurl(["actas" => $rrow->email]));
+                    $this->prow->reviewurl(["actas" => $rrowid->email]));
             }
         } else {
             $name = Text::nameo_h($rrowid, NAME_P);
@@ -365,7 +354,7 @@ class Assign_Page {
         }
 
         // main render
-        echo '<div class="ui js-foldup"><a href="" class="ui js-foldup">', expander(null, 0), '</a>';
+        echo '<div class="ui js-foldup"><button type="button" class="q ui js-foldup">', expander(null, 0), '</button>';
         $reason = null;
         if ($rrow->reviewType >= 0) {
             $this->print_reqrev_main($rrow, $namex, $time);
@@ -380,11 +369,14 @@ class Assign_Page {
             || ($rrow->reviewType !== REVIEW_REFUSAL
                 && $this->user->contactId > 0
                 && $rrow->requestedBy == $this->user->contactId)) {
-            echo Ht::form($this->conf->hoturl("=assign", ["p" => $this->prow->paperId, "action" => "managerequest", "email" => $rrow->email, "round" => $rrow->reviewRound]), ["class" => "fx"]);
+            echo Ht::form($this->conf->hoturl("=assign", [
+                    "p" => $this->prow->paperId, "action" => "managerequest",
+                    "email" => $rrowid->email, "round" => $rrow->reviewRound
+                ]), ["class" => "fx"]);
             if (!isset($rrow->contactId) || !$rrow->contactId) {
-                echo Ht::hidden("firstName", $rrow->firstName),
-                    Ht::hidden("lastName", $rrow->lastName),
-                    Ht::hidden("affiliation", $rrow->affiliation);
+                echo Ht::hidden("firstName", $rrowid->firstName),
+                    Ht::hidden("lastName", $rrowid->lastName),
+                    Ht::hidden("affiliation", $rrowid->affiliation);
             }
             $buttons = [];
             if ($reason) {
@@ -454,14 +446,18 @@ class Assign_Page {
             echo '" data-review-in-progress="';
         }
         echo '"><div class="pctbname pctbname', $crevtype, ' ui js-assignment-fold">',
-            '<a class="q ui js-assignment-fold" href="">', expander(null, 0),
-            $this->user->reviewer_html_for($pc), '</a>';
+            '<button type="button" class="q ui js-assignment-fold">', expander(null, 0),
+            $this->user->reviewer_html_for($pc), '</button>';
         if ($crevtype != 0) {
             echo review_type_icon($crevtype, $rrow && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED, "ml-2"),
                 $rrow ? $rrow->round_h() : "";
         }
         if ($revtype >= 0) {
-            echo unparse_preference_span($this->prow->preference($pc, true));
+            $pf = $this->prow->preference($pc);
+            $tv = $pf->preference ? null : $this->prow->topic_interest_score($pc);
+            if ($pf->exists() || $tv) {
+                echo " ", $pf->unparse_span($tv);
+            }
         }
         echo '</div>'; // .pctbname
         if ($potconf) {
@@ -501,7 +497,7 @@ class Assign_Page {
         $t = $this->pt->review_table();
         if ($t !== "") {
             echo '<div class="pcard revcard">',
-                '<div class="revcard-head"><h2>Reviews</h2></div>',
+                '<h2 class="revcard-head" id="current-reviews">Current reviews</h2>',
                 '<div class="revpcard-body">', $t, '</div></div>';
         }
 
@@ -531,7 +527,7 @@ class Assign_Page {
 
         if (!empty($requests)) {
             echo '<div class="pcard revcard">',
-                '<div class="revcard-head"><h2>Review requests</h2></div>',
+                '<h2 class="revcard-head" id="review-requests">Review requests</h2>',
                 '<div class="revcard-body"><div class="ctable-wide">';
             foreach ($requests as $req) {
                 $this->print_reqrev($req[3], $req[1]);
@@ -545,10 +541,14 @@ class Assign_Page {
 
             // PC conflicts row
             echo '<div class="pcard revcard">',
-                '<div class="revcard-head"><h2>PC assignments</h2></div>',
+                '<h2 class="revcard-head" id="pc-assignments">PC assignments</h2>',
                 '<div class="revcard-body">',
-                Ht::form($this->conf->hoturl("=assign", "p=$prow->paperId"), ["id" => "ass", "class" => "need-unload-protection"]);
-            Ht::stash_script('hotcrp.highlight_form_children("#ass")');
+                Ht::form($this->conf->hoturl("=assign", "p=$prow->paperId"), [
+                    "id" => "f-pc-assignments",
+                    "class" => "need-unload-protection need-diff-check",
+                    "data-differs-toggle" => "paper-alert"
+                ]);
+            Ht::stash_script('$(hotcrp.load_editable_pc_assignments)');
 
             if ($this->conf->has_topics()) {
                 echo "<p>Review preferences display as “P#”, topic scores as “T#”.</p>";
@@ -569,7 +569,7 @@ class Assign_Page {
             }
 
             echo "</div>\n",
-                '<div class="aab aabig">',
+                '<div class="aab">',
                 '<div class="aabut">', Ht::submit("update", "Save assignments", ["class" => "btn-primary"]), '</div>',
                 '<div class="aabut">', Ht::submit("cancel", "Cancel"), '</div>',
                 '<div id="assresult" class="aabut"></div>',
@@ -578,16 +578,15 @@ class Assign_Page {
 
 
         // add external reviewers
-        $req = "Request an external review";
+        $req = "Request external review";
         if (!$user->allow_administer($prow) && $this->conf->setting("extrev_chairreq")) {
-            $req = "Propose an external review";
+            $req = "Propose external review";
         }
         echo '<div class="pcard revcard">',
             Ht::form($this->conf->hoturl("=assign", "p=$prow->paperId"), ["novalidate" => true]),
-            '<div class="revcard-head">',
-            "<h2>", $req, "</h2></div><div class=\"revcard-body\">";
+            "<h2 class=\"revcard-head\" id=\"external-reviews\">", $req, "</h2><div class=\"revcard-body\">";
 
-        echo '<p class="w-text">', $this->conf->_id("external_review_request_description", "");
+        echo '<p class="w-text">', $this->conf->_i("external_review_request_description");
         if ($user->allow_administer($prow)) {
             echo "\nTo create an anonymous review with a review token, leave Name and Email blank.";
         }
@@ -644,12 +643,12 @@ class Assign_Page {
         if ($user->can_administer($prow)) {
             echo '<label class="', $this->ms->control_class("override", "checki"), '"><span class="checkc">',
                 Ht::checkbox("override"),
-                ' </span>Override deadlines and declined requests</label>';
+                ' </span>Override declined requests</label>';
         }
 
         echo '<div class="aab">',
             '<div class="aabut aabutsp">', Ht::submit("requestreview", "Request review", ["class" => "btn-primary"]), '</div>',
-            '<div class="aabut"><a class="ulh ui js-request-review-preview-email" href="">Preview request email</a></div>',
+            '<div class="aabut"><button type="button" class="link ulh ui js-request-review-preview-email">Preview request email</button></div>',
             "</div>\n\n";
 
         echo "</div></div></form></div></article>\n";

@@ -20,7 +20,7 @@ class Sclass_SearchTerm extends SearchTerm {
         $tagger = new Tagger($srch->user);
         $tag = $tagger->check($word, Tagger::ALLOWRESERVED | Tagger::NOPRIVATE | Tagger::NOCHAIR);
         if ($tag === false) {
-            $srch->lwarning($sword, "<5>" . $tagger->error_html(true));
+            $srch->lwarning($sword, $tagger->error_ftext(true));
             return new False_SearchTerm;
         }
 
@@ -48,7 +48,7 @@ class Sclass_SearchTerm extends SearchTerm {
     function debug_json() {
         return ["type" => $this->type, "sclass" => $this->negate ? "any" : $this->sr->tag];
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

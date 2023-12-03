@@ -1,6 +1,6 @@
 <?php
 // search/st_comment.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Comment_SearchTerm extends SearchTerm {
     /** @var Contact */
@@ -35,7 +35,7 @@ class Comment_SearchTerm extends SearchTerm {
         $this->only_author = $kwdef->only_author;
         $this->commentRound = $kwdef->round;
     }
-    static function comment_factory($keyword, Contact $user, $kwfj, $m) {
+    static function comment_factory($keyword, XtParams $xtp, $kwfj, $m) {
         $tword = str_replace("-", "", $m[1]);
         return (object) [
             "name" => $keyword,
@@ -49,20 +49,20 @@ class Comment_SearchTerm extends SearchTerm {
         ];
     }
     /** @param array{string,string,string,string} $m */
-    static function response_factory($keyword, Contact $user, $kwfj, $m) {
+    static function response_factory($keyword, XtParams $xtp, $kwfj, $m) {
         if ($m[2] === "") {
             $round = 0;
         } else {
             if ($m[2] !== "-" && str_ends_with($m[2], "-")) {
                 $m[2] = substr($m[2], 0, -1);
             }
-            $rrd = $user->conf->response_round($m[2]);
+            $rrd = $xtp->conf->response_round($m[2]);
             if (!$rrd
                 && $m[1] === ""
                 && preg_match('/\A(draft-?)(.*)\z/si', $m[2], $mm)) {
                 $m[1] = $mm[1];
                 $m[2] = $mm[2];
-                $rrd = $user->conf->response_round($m[2]);
+                $rrd = $xtp->conf->response_round($m[2]);
             }
             if (!$rrd) {
                 return null;
@@ -93,8 +93,8 @@ class Comment_SearchTerm extends SearchTerm {
             && !$srch->conf->pc_tag_exists(substr($a[0], 1))) {
             $tags = new TagSearchMatcher($srch->user);
             $tags->add_check_tag(substr($a[0], 1), true);
-            foreach ($tags->error_texts() as $e) {
-                $srch->lwarning($sword, "<5>$e");
+            foreach ($tags->error_ftexts() as $e) {
+                $srch->lwarning($sword, $e);
             }
         } else if ($a[0] !== "") {
             $contacts = $srch->matching_uids($a[0], $sword->quoted, false);
@@ -120,7 +120,7 @@ class Comment_SearchTerm extends SearchTerm {
             $where[] = "(commentType&{$this->type_mask})={$this->type_value}";
         }
         if ($this->only_author) {
-            $where[] = "commentType>=" . CommentInfo::CT_AUTHOR;
+            $where[] = "commentType>=" . CommentInfo::CTVIS_AUTHOR;
         }
         if ($this->commentRound) {
             $where[] = "commentRound=" . $this->commentRound;
@@ -147,7 +147,7 @@ class Comment_SearchTerm extends SearchTerm {
         foreach ($row->viewable_comment_skeletons($this->user, $textless) as $crow) {
             if ($this->csm->test_contact($crow->contactId)
                 && ($crow->commentType & $this->type_mask) == $this->type_value
-                && (!$this->only_author || $crow->commentType >= CommentInfo::CT_AUTHOR)
+                && (!$this->only_author || $crow->commentType >= CommentInfo::CTVIS_AUTHOR)
                 && (!$this->tags || $this->tags->test((string) $crow->viewable_tags($this->user))))
                 ++$n;
         }

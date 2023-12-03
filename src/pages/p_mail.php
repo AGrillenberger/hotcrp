@@ -1,6 +1,6 @@
 <?php
 // pages/p_mail.php -- HotCRP mail tool
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Mail_Page {
     /** @var Conf */
@@ -25,7 +25,7 @@ class Mail_Page {
         if ($viewer->privChair) {
             $this->search_topt["s"] = PaperSearch::$search_type_names["s"];
             if ($this->conf->has_any_accepted()) {
-                $this->search_topt["acc"] = PaperSearch::$search_type_names["acc"];
+                $this->search_topt["accepted"] = PaperSearch::$search_type_names["accepted"];
             }
             $this->search_topt["unsub"] = "Unsubmitted";
             $this->search_topt["all"] = PaperSearch::$search_type_names["all"];
@@ -59,7 +59,7 @@ class Mail_Page {
             && ctype_digit($qreq->mailid)
             && $this->viewer->privChair
             && !$qreq->send) {
-            $row = $this->conf->fetch_first_object("select * from MailLog where mailId=" . $qreq->mailid);
+            $row = $this->conf->fetch_first_object("select * from MailLog where mailId=?", $qreq->mailid);
             if ($row) {
                 foreach (["recipients", "q", "t", "cc", "subject"] as $field) {
                     if (isset($row->$field) && !isset($qreq[$field]))
@@ -110,12 +110,11 @@ class Mail_Page {
         } else if ($qreq->has_a("p") && !isset($qreq->recheck)) {
             $papersel = [];
             foreach ($qreq->get_a("p") as $p) {
-                if (($p = cvtint($p)) > 0)
+                if (($p = stoi($p) ?? -1) > 0)
                     $papersel[] = $p;
             }
             sort($papersel);
             $qreq->q = join(" ", $papersel);
-            error_log("XXXX");
             $qreq->plimit = 1;
         } else {
             $qreq->q = "";
@@ -123,54 +122,13 @@ class Mail_Page {
         }
 
         // template
-        $null_mailer = new HotCRPMailer($this->conf, null, [
-            "requester_contact" => $this->viewer, "width" => false
-        ]);
-        if (isset($qreq->template) && !isset($qreq->check) && !isset($qreq->default)) {
-            $t = $qreq->template ?? "generic";
-            $template = (array) $this->conf->mail_template($t);
-            if (!($template["allow_template"] ?? false)) {
-                $template = (array) $this->conf->mail_template("generic");
-            }
-            if (!isset($qreq->to) || $qreq->loadtmpl != -1) {
-                $qreq->to = $template["default_recipients"] ?? "s";
-            }
-            if (!isset($qreq->t) && isset($template["default_search_type"])) {
-                $qreq->t = $template["default_search_type"];
-            }
-            if (!isset($qreq->subject)) {
-                $qreq->subject = $null_mailer->expand($template["subject"]);
-            }
-            if (!isset($qreq->body)) {
-                $qreq->body = $null_mailer->expand($template["body"]);
-            }
+        if (isset($qreq->template)
+            && !isset($qreq->check)
+            && !isset($qreq->send)
+            && !isset($qreq->default)) {
+            MailSender::load_template($qreq, $qreq->template, false);
         }
-
-        // fields: subject, body, cc, reply-to
-        if (!isset($qreq->subject)) {
-            $tmpl = $this->conf->mail_template("generic");
-            $qreq->subject = $null_mailer->expand($tmpl->subject, "subject");
-        }
-        $qreq->subject = trim($qreq->subject);
-        if (str_starts_with($qreq->subject, "[{$this->conf->short_name}] ")) {
-            $qreq->subject = substr($qreq->subject, strlen($this->conf->short_name) + 3);
-        }
-        if (!isset($qreq->body)) {
-            $tmpl = $this->conf->mail_template("generic");
-            $qreq->body = $null_mailer->expand($tmpl->body, "body");
-        }
-        if (isset($qreq->cc) && $this->viewer->is_manager()) {
-            // XXX should only apply to papers you administer
-            $qreq->cc = simplify_whitespace($qreq->cc);
-        } else {
-            $qreq->cc = $this->conf->opt("emailCc") ?? "";
-        }
-        if (isset($qreq["reply-to"]) && $this->viewer->is_manager()) {
-            // XXX should only apply to papers you administer
-            $qreq["reply-to"] = simplify_whitespace($qreq["reply-to"]);
-        } else {
-            $qreq["reply-to"] = $this->conf->opt("emailReplyTo") ?? "";
-        }
+        MailSender::clean_request($qreq);
 
         // set MailRecipients properties
         $this->recip->set_newrev_since($this->qreq->newrev_since);
@@ -195,7 +153,7 @@ class Mail_Page {
     function print_review_requests() {
         $plist = new PaperList("reqrevs", new PaperSearch($this->viewer, ["t" => "req", "q" => ""]));
         $plist->set_table_id_class("foldpl", "fullw");
-        $plist->set_view("sel", false);
+        $plist->set_view("sel", false, PaperList::VIEWORIGIN_MAX);
         if ($plist->is_empty()) {
             $this->conf->warning_msg("<5>You have not requested any external reviews. " . Ht::link("Return home", $this->conf->hoturl("index")));
         } else {
@@ -246,11 +204,11 @@ class Mail_Page {
 
         $opts = array_filter($this->conf->options()->normal(), function ($o) {
             return $o->search_keyword() !== false
-                && $o->can_render(FieldRender::CFMAIL);
+                && $o->on_render_context(FieldRender::CFMAIL);
         });
         usort($opts, function ($a, $b) {
-            if ($a->final !== $b->final) {
-                return $a->final ? 1 : -1;
+            if ($a->is_final() !== $b->is_final()) {
+                return $a->is_final() ? 1 : -1;
             } else {
                 return PaperOption::compare($a, $b);
             }
@@ -327,7 +285,7 @@ class Mail_Page {
         if ($this->viewer->privChair) {
             echo '<div class="fx9 checki mt-1"><span class="checkc">',
                 Ht::hidden("has_plimit", 1),
-                Ht::checkbox("plimit", 1, !!$this->qreq->plimit, ["id" => "plimit"]),
+                Ht::checkbox("plimit", 1, !!$this->qreq->plimit, ["id" => "plimit", "class" => "uich js-mail-recipients"]),
                 '</span>',
                 '<label for="plimit">Choose papers<span class="fx8">:</span></label>';
         } else {
@@ -351,7 +309,7 @@ class Mail_Page {
             echo '<label for="q" class="mr-2">Papers:</label>';
         }
         echo Ht::entry("q", (string) $this->qreq->q, [
-                "id" => "q", "placeholder" => "(All)", "spellcheck" => false,
+                "placeholder" => "(All)", "spellcheck" => false,
                 "class" => "papersearch need-suggest js-autosubmit",
                 "size" => $this->viewer->privChair ? 36 : 32,
                 "data-submit-fn" => "psearch"
@@ -366,7 +324,9 @@ class Mail_Page {
         if ($plist && !$plist->is_empty()) {
             echo '<div class="fx8 mt-2">';
             $plist->print_table_html();
-            echo Ht::hidden("prevt", $this->qreq->t), Ht::hidden("prevq", $this->qreq->q), '</div>';
+            echo Ht::hidden("prevt", $this->qreq->t),
+                Ht::hidden("prevq", $this->qreq->q),
+                '</div>';
         }
         echo "</div>"; // <div class="fx9...
     }
@@ -387,13 +347,35 @@ class Mail_Page {
     }
 
     function print_form() {
-        echo Ht::form($this->conf->hoturl("=mail", ["check" => 1, "monreq" => $this->qreq->monreq]), ["id" => "mailform"]),
+        // default messages
+        $nullm = MailSender::null_mailer($this->viewer);
+        $defprefix = "[{$this->conf->short_name}] ";
+        $templates = [];
+        foreach ($this->recip->default_messages() as $dm) {
+            if (($template = $this->conf->mail_template($dm))) {
+                $s = $nullm->expand($template->subject, "subject");
+                if (str_starts_with($s, $defprefix)) {
+                    $s = substr($s, strlen($defprefix));
+                }
+                $b = $nullm->expand($template->body, "body");
+                $templates[$dm] = ["subject" => $s, "body" => $b];
+            }
+        }
+        $deftemplate = $templates[$this->recip->current_default_message()] ?? null;
+
+        // form
+        echo Ht::form($this->conf->hoturl("=mail", ["check" => 1, "monreq" => $this->qreq->monreq]), [
+                "id" => "mailform",
+                "data-default-messages" => json_encode_browser((object) $templates)
+            ]),
             Ht::hidden("defaultfn", ""),
             Ht::hidden_default_submit("default", 1);
 
         $this->print_template();
 
-        echo '<fieldset class="mail-editor fold8c fold9o fold10c" style="float:left;margin:4px 1em 1em 0" id="foldpsel">';
+        echo '<fieldset class="mail-editor main-width ',
+            $this->recip->current_fold_classes($this->qreq),
+            '" style="float:left;margin:4px 1em 1em 0" id="foldpsel">';
 
         // ** TO
         echo '<div class="mail-field mb-3">',
@@ -404,6 +386,7 @@ class Mail_Page {
             $this->print_new_assignments_since();
         }
         $this->print_paper_selection();
+        //Ht::stash_script('$(function(){$(".js-mail-recipients").first().change()})');
         echo "</div></div>\n";
 
         // ** CC, REPLY-TO
@@ -430,27 +413,20 @@ class Mail_Page {
             $this->recip->feedback_html_at("subject"),
             Ht::textarea("subject", $this->qreq->subject, [
                 "id" => "subject", "rows" => 1, "data-submit-fn" => "false",
-                "class" => $this->recip->control_class("subject", "js-autosubmit need-autogrow w-100")
+                "class" => $this->recip->control_class("subject", "js-autosubmit need-autogrow w-100"),
+                "spellcheck" => true,
+                "data-default-value" => $deftemplate["subject"] ?? ""
             ]), "</div></div>\n";
 
         // ** BODY
         echo Ht::textarea("body", $this->qreq->body, [
             "id" => "email-body", "rows" => 12, "cols" => 70,
-            "class" => "w-100 need-autogrow", "spellcheck" => "true"
+            "class" => "w-100 need-autogrow",
+            "spellcheck" => "true",
+            "data-default-value" => $deftemplate["body"] ?? ""
         ]);
 
         echo "</fieldset>\n\n";
-        Ht::stash_script('function mail_recipients_fold() {
-    var plimit = document.getElementById("plimit"),
-        toe = document.getElementById("to");
-    hotcrp.foldup.call(toe, null, {f: !plimit || !plimit.checked, n: 8});
-    var sopt = $(toe).find("option[value=\'" + toe.value + "\']");
-    hotcrp.foldup.call(toe, null, {f: sopt.hasClass("mail-want-no-papers"), n: 9});
-    hotcrp.foldup.call(toe, null, {f: !sopt.hasClass("mail-want-since"), n: 10});
-}
-$("#to, #plimit").on("change", mail_recipients_fold);
-$(mail_recipients_fold)');
-
 
         if ($this->viewer->privChair) {
             $this->print_mail_log();
@@ -468,7 +444,8 @@ $(mail_recipients_fold)');
     static function go(Contact $user, Qrequest $qreq) {
         if (isset($qreq->cancel)) {
             $user->conf->redirect_self($qreq, $qreq->subset_as_array("monreq", "to", "has_plimit", "plimit", "q", "t", "cc", "reply-to", "subject", "body", "template"));
-        } else if (!$user->is_manager() && !$user->isPC) {
+        }
+        if (!$user->is_manager() && !$user->isPC) {
             $user->escape();
         }
 
@@ -486,11 +463,11 @@ $(mail_recipients_fold)');
             && !$mp->recip->has_error()
             && $qreq->valid_token()) {
             if ($qreq->send && $qreq->mailid && $qreq->is_post()) {
-                MailSender::send2($user, $mp->recip, $qreq);
+                MailSender::send2($mp->recip, $qreq);
             } else if ($qreq->send && $qreq->is_post()) {
-                MailSender::send1($user, $mp->recip, $qreq);
+                MailSender::send1($mp->recip, $qreq);
             } else if ($qreq->check || $qreq->group || $qreq->ungroup) {
-                MailSender::check($user, $mp->recip, $qreq);
+                MailSender::check($mp->recip, $qreq);
             }
         }
 

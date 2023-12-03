@@ -1,6 +1,6 @@
 <?php
 // assign.php -- HotCRP assignment script
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -32,7 +32,7 @@ class Assign_Batch {
 
     /** @return int */
     function run() {
-        $assignset = new AssignmentSet($this->user, true);
+        $assignset = (new AssignmentSet($this->user))->set_override_conflicts(true);
         $assignset->parse($this->text, $this->filename);
         if ($assignset->has_error()) {
             fwrite(STDERR, $assignset->full_feedback_text());

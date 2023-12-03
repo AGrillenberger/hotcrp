@@ -1,8 +1,8 @@
 <?php
 // decisionset.php -- HotCRP helper class for set of decisions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
-class DecisionSet implements ArrayAccess, IteratorAggregate, Countable {
+class DecisionSet implements IteratorAggregate, Countable {
     /** @var Conf */
     public $conf;
     /** @var array<int,DecisionInfo> */
@@ -69,7 +69,7 @@ class DecisionSet implements ArrayAccess, IteratorAggregate, Countable {
 
         if ($id !== 0 && ($dinfo->catbits & DecisionInfo::CAT_OTHER) !== 0) {
             $this->_has_other = true;
-        } else if ($dinfo->catbits === DecisionInfo::CAT_DESKREJECT) {
+        } else if ($dinfo->catbits === DecisionInfo::CB_DESKREJECT) {
             $this->_has_desk_reject = true;
         }
 
@@ -110,23 +110,6 @@ class DecisionSet implements ArrayAccess, IteratorAggregate, Countable {
     function getIterator() {
         return new ArrayIterator($this->_decision_map);
     }
-    #[\ReturnTypeWillChange]
-    function offsetExists($offset) {
-        return isset($this->_decision_map[$offset]);
-    }
-    /** @return ?DecisionInfo */
-    #[\ReturnTypeWillChange]
-    function offsetGet($offset) {
-        return $this->_decision_map[$offset] ?? null;
-    }
-    #[\ReturnTypeWillChange]
-    function offsetSet($offset, $value) {
-        throw new Exception("invalid DecisionSet::offsetSet");
-    }
-    #[\ReturnTypeWillChange]
-    function offsetUnset($offset) {
-        throw new Exception("invalid DecisionSet::offsetUnset");
-    }
 
     /** @param int $decid
      * @return bool */
@@ -145,19 +128,36 @@ class DecisionSet implements ArrayAccess, IteratorAggregate, Countable {
         return array_keys($this->_decision_map);
     }
 
+    /** @param string|list<int> $matchexpr
+     * @return list<DecisionInfo> */
+    function filter_using($matchexpr) {
+        $a = [];
+        foreach ($this->_decision_map as $dec) {
+            if (CountMatcher::compare_using($dec->id, $matchexpr))
+                $a[] = $dec;
+        }
+        return $a;
+    }
+
     /** @return list<int> */
     function desk_reject_ids() {
-        return $this->_has_desk_reject ? $this->cat_ids(DecisionInfo::CAT_NO | DecisionInfo::CAT_SUBTYPE, DecisionInfo::CAT_DESKREJECT) : [];
+        if (!$this->_has_desk_reject) {
+            return [];
+        }
+        $decids = [];
+        foreach ($this->_decision_map as $dec) {
+            if ($dec->catbits === DecisionInfo::CB_DESKREJECT)
+                $decids[] = $dec->id;
+        }
+        return $decids;
     }
 
     /** @param int $mask
-     * @param ?int $value
      * @return list<int> */
-    private function cat_ids($mask, $value = null) {
+    private function cat_ids($mask) {
         $decids = [];
-        $value = $value ?? $mask;
         foreach ($this->_decision_map as $dec) {
-            if (($dec->catbits & $mask) === $value)
+            if (($dec->catbits & $mask) !== 0)
                 $decids[] = $dec->id;
         }
         return $decids;

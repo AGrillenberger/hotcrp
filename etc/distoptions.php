@@ -101,6 +101,7 @@ $Opt["emailSender"] = null;
 //   defaultEmailDomain Set to the default domain for account email addresses
 //                   when using httpAuthLogin.
 //   disableNewUsers Don’t allow new users to register.
+//   disableNonPC    Disable all accounts except PC and sysadmin accounts.
 
 
 // PASSWORD SECURITY
@@ -157,7 +158,7 @@ $Opt["emailSender"] = null;
 //                   " <span class='barsep'>|</span> ".
 //   assetsUrl       URL prefix for assets (stylesheets/, scripts/, images/).
 //                   Defaults to the conference installation.
-//   scriptAssetsUrl URL prefix for script assets. Defaults to assetsURL,
+//   scriptAssetsUrl URL prefix for script assets. Defaults to assetsUrl,
 //                   except for browsers known to ignore `crossorigin`, where
 //                   it defaults to the conference installation.
 //   jqueryUrl       URL for jQuery. Defaults to the local minified jquery.
@@ -211,7 +212,7 @@ $Opt["smartScoreCompare"] = true;
 //                   The default is derived from $Opt["dbName"], etc.
 //   memoryLimit     Maximum amount of memory a PHP script can use. Defaults
 //                   to 128MB.
-//   pdftohtml       Pathname to pdftohtml executable (used only by the "banal"
+//   pdftohtmlCommand  Pathname to pdftohtml executable (used by the `banal`
 //                   paper format checker).
 //   banalLimit      Limit on number of parallel paper format checker
 //                   executions. Defaults to 8.

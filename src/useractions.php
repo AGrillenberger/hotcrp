@@ -1,6 +1,6 @@
 <?php
 // useractions.php -- HotCRP helpers for user actions
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class UserActions {
     /** @param Conf $conf
@@ -18,14 +18,19 @@ class UserActions {
         return $users;
     }
 
+    /** @param list<int> $ids
+     * @return object */
     static function disable(Contact $user, $ids) {
         $conf = $user->conf;
-        $users = self::load_users($conf, "select * from ContactInfo where contactId?a and disabled=0 and contactId!=?", [$ids, $user->contactId]);
+        $users = self::load_users($conf, "select * from ContactInfo where contactId?a and (cflags&?)=0 and contactId!=?",
+            [$ids, Contact::CFLAG_UDISABLED, $user->contactId]);
         $j = (object) ["ok" => true, "message_list" => []];
         if (empty($users)) {
-            $j->message_list[] = new MessageItem(null, "<0>No changes (those accounts were already disabled)", MessageSet::MARKED_NOTE);
+            $j->message_list[] = new MessageItem(null, "<0>No changes (those accounts were already disabled)", MessageSet::WARNING_NOTE);
         } else {
-            $conf->qe("update ContactInfo set disabled=1 where contactId?a and disabled=0", array_keys($users));
+            $conf->qe("update ContactInfo set disabled=?, cflags=cflags|? where contactId?a and (cflags&?)=0",
+                Contact::CFLAG_UDISABLED, Contact::CFLAG_UDISABLED,
+                array_keys($users), Contact::CFLAG_UDISABLED);
             $conf->delay_logs();
             foreach ($users as $u) {
                 $conf->log_for($user, $u, "Account disabled");
@@ -36,14 +41,18 @@ class UserActions {
         return $j;
     }
 
+    /** @param list<int> $ids
+     * @return object */
     static function enable(Contact $user, $ids) {
         $conf = $user->conf;
-        $users = self::load_users($conf, "select * from ContactInfo where contactId?a and disabled=1", [$ids]);
+        $users = self::load_users($conf, "select * from ContactInfo where contactId?a and (cflags&?)!=0",
+            [$ids, Contact::CFLAG_UDISABLED]);
         $j = (object) ["ok" => true, "message_list" => []];
         if (empty($users)) {
-            $j->message_list[] = new MessageItem(null, "<0>No changes (those accounts were already enabled)", MessageSet::MARKED_NOTE);
+            $j->message_list[] = new MessageItem(null, "<0>No changes (those accounts were already enabled)", MessageSet::WARNING_NOTE);
         } else {
-            $conf->qe("update ContactInfo set disabled=0 where contactId?a", array_keys($users));
+            $conf->qe("update ContactInfo set disabled=0, cflags=(cflags&~?) where contactId?a and (cflags&?)!=0",
+                Contact::CFLAG_UDISABLED, array_keys($users), Contact::CFLAG_UDISABLED);
             $conf->delay_logs();
             foreach ($users as $u) {
                 $conf->log_for($user, $u, "Account enabled");
@@ -63,6 +72,8 @@ class UserActions {
         return $j;
     }
 
+    /** @param list<int> $ids
+     * @return object */
     static function send_account_info(Contact $user, $ids) {
         $conf = $user->conf;
         $users = self::load_users($conf, "select * from ContactInfo where contactId?a", [$ids]);

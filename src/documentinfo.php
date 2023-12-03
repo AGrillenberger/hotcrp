@@ -1,6 +1,6 @@
 <?php
 // documentinfo.php -- HotCRP document objects
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class DocumentInfo implements JsonSerializable {
     /** @var Conf */
@@ -19,7 +19,7 @@ class DocumentInfo implements JsonSerializable {
     public $mimetype;
     /** @var ?string */
     private $paper;    // translated to `content` on load
-    public $compression;
+    public $compression; // 0: uncompressed, 1: gz, -1: skeleton
     /** @var string|false */
     public $sha1 = ""; // binary hash; empty = unhashed, false = not available
     /** @var ?string|false */
@@ -30,14 +30,20 @@ class DocumentInfo implements JsonSerializable {
     public $filename;
     /** @var ?string|false */
     private $infoJson;
-    /** @var ?int */
-    public $size;
+    /** @var int */
+    private $size = -1;
     /** @var ?int */
     public $filterType;
     /** @var ?int */
     public $originalStorageId;
     /** @var int */
     public $inactive = 0;
+    /** @var ?int */
+    private $npages;
+    /** @var ?int */
+    private $width;
+    /** @var ?int */
+    private $height;
 
     /** @var ?string */
     private $content;
@@ -52,6 +58,7 @@ class DocumentInfo implements JsonSerializable {
 
     /** @var ?object */
     private $_metadata;
+    /** @var ?CommentInfo */
     private $_owner;
     /** @var ?string */
     public $sourceHash;
@@ -61,13 +68,15 @@ class DocumentInfo implements JsonSerializable {
     private $_member_filename;
     /** @var ?MessageSet */
     private $_ms;
+    /** @var ?array */
+    private $_old_prop;
 
     const LINKTYPE_COMMENT_BEGIN = 0;
     const LINKTYPE_COMMENT_END = 1024;
 
     const FLAG_NO_DOCSTORE = 1;
 
-    /** @param array{paperId?:int,paperStorageId?:int,timestamp?:int,mimetype?:string,content?:string,content_base64?:string,content_file?:string,hash?:?string,crc32?:?string,documentType?:int,filename?:?string,metadata?:array|object,infoJson?:?string,size?:?int,filterType?:?int,originalStorageId?:?int,sourceHash?:?string,filters_applied?:?list<FileFilter>,sha1?:void,filestore?:void} $p */
+    /** @param array{paperId?:int,paperStorageId?:int,timestamp?:int,mimetype?:string,content?:string,content_base64?:string,content_file?:string,hash?:?string,crc32?:?string,documentType?:int,filename?:?string,metadata?:array|object,infoJson?:?string,size?:int,filterType?:?int,originalStorageId?:?int,sourceHash?:?string,filters_applied?:?list<FileFilter>,sha1?:void,filestore?:void} $p */
     function __construct($p, Conf $conf, PaperInfo $prow = null) {
         $this->conf = $conf;
         $this->prow = $prow;
@@ -117,7 +126,7 @@ class DocumentInfo implements JsonSerializable {
         } else if ($this->paperStorageId > 0) {
             $this->infoJson = false;
         }
-        $this->size = $p["size"] ?? null;
+        $this->size = $p["size"] ?? -1;
         $this->filterType = $p["filterType"] ?? null;
         $this->originalStorageId = $p["originalStorageId"] ?? null;
         if (isset($p["sourceHash"])) {
@@ -140,12 +149,32 @@ class DocumentInfo implements JsonSerializable {
         $this->inactive = (int) $this->inactive;
         $this->content = $this->content ?? $this->paper;
         $this->paper = null;
+        if (isset($this->npages)) {
+            $this->npages = (int) $this->npages;
+        }
+        if (isset($this->width)) {
+            $this->width = (int) $this->width;
+        }
+        if (isset($this->height)) {
+            $this->height = (int) $this->height;
+        }
     }
 
     /** @param mysqli_result|Dbl_Result $result
      * @return ?DocumentInfo */
     static function fetch($result, Conf $conf, PaperInfo $prow = null) {
         return $result->fetch_object("DocumentInfo", [null, $conf, $prow]);
+    }
+
+    /** @return DocumentInfo */
+    static function make_empty(Conf $conf, PaperInfo $prow = null) {
+        // matches paperStorageId 1 in schema
+        return new DocumentInfo([
+            "paperStorageId" => 1, "paperId" => 0, "timestamp" => 0,
+            "mimetype" => "text/plain", "content" => "",
+            "hash" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+            "size" => 0
+        ], $conf, $prow);
     }
 
     /** @param QrequestFile $upload
@@ -168,8 +197,9 @@ class DocumentInfo implements JsonSerializable {
         if ($upload->content !== null) {
             $args["content"] = $upload->content;
         } else if ($upload->tmp_name !== null && is_readable($upload->tmp_name)) {
-            $args["size"] = filesize($upload->tmp_name);
-            if ($args["size"] > 0) {
+            $sz = filesize($upload->tmp_name);
+            if ($sz !== false && $sz > 0) {
+                $args["size"] = $sz;
                 $args["content_file"] = $upload->tmp_name;
             } else {
                 $upload_error = " was empty, not saving";
@@ -190,31 +220,65 @@ class DocumentInfo implements JsonSerializable {
      * @param int $paperId
      * @param int $documentType
      * @return ?DocumentInfo */
-    static function make_capability($token, $paperId, $documentType, Conf $conf) {
-        if (!$token
-            || !($cap = TokenInfo::find($token, $conf))
-            || !$cap->is_active()
-            || $cap->capabilityType !== TokenInfo::UPLOAD) {
+    static function make_capability(Conf $conf, $token, $paperId, $documentType) {
+        if ($token
+            && ($toki = TokenInfo::find($token, $conf))
+            && $toki->is_active()
+            && $toki->capabilityType === TokenInfo::UPLOAD) {
+            return self::make_token($conf, $toki, null, $paperId, $documentType);
+        } else {
             return null;
         }
-        $capd = json_decode($cap->data);
-        if (!$capd->hash) {
+    }
+
+    /** @param ?string $content_file
+     * @param ?int $paperId
+     * @param ?int $documentType
+     * @return ?DocumentInfo */
+    static function make_token(Conf $conf, TokenInfo $toki, $content_file = null,
+                               $paperId = null, $documentType = null) {
+        assert($toki->capabilityType === TokenInfo::UPLOAD);
+        $tokd = json_decode($toki->data);
+        if (!$tokd->hash) {
             return null;
         }
         $args = [
-            "paperId" => $paperId,
-            "documentType" => $documentType,
+            "paperId" => $paperId ?? $toki->paperId,
+            "documentType" => $documentType ?? $tokd->dtype,
             "timestamp" => time(),
-            "mimetype" => $capd->mimetype ?? null,
-            "filename" => self::sanitize_filename($capd->filename),
-            "size" => $capd->size,
-            "hash" => $capd->hash,
-            "crc32" => $capd->crc32 ?? null
+            "mimetype" => $tokd->mimetype ?? null,
+            "filename" => self::sanitize_filename($tokd->filename),
+            "size" => $tokd->size,
+            "hash" => $tokd->hash,
+            "crc32" => $tokd->crc32 ?? null
         ];
+        if ($content_file !== null) {
+            $args["content_file"] = $content_file;
+        }
+        $doc = new DocumentInfo($args, $conf);
+        if ($doc->content_available() || $doc->load_docstore()) {
+            $doc->analyze_content();
+        }
+        $doc->_prefer_s3 = !!($tokd->s3_status ?? false);
+        return $doc;
+    }
+
+    /** @param string $filename
+     * @param array $args
+     * @return ?DocumentInfo */
+    static function make_file($filename, Conf $conf, $args = []) {
+        $args["content_file"] = $filename;
         $doc = new DocumentInfo($args, $conf);
         $doc->analyze_content();
-        $doc->_prefer_s3 = !!($capd->s3_status ?? false);
         return $doc;
+    }
+
+    /** @param string $name
+     * @return bool */
+    static function has_request_for(Qrequest $qreq, $name) {
+        return $qreq["{$name}:upload"]
+            || $qreq->has_file("{$name}:file")
+            || $qreq->has_file($name) /* XXX obsolete */;
     }
 
     /** @param string $name
@@ -223,10 +287,10 @@ class DocumentInfo implements JsonSerializable {
      * @return ?DocumentInfo */
     static function make_request(Qrequest $qreq, $name, $paperId,
                                  $documentType, Conf $conf) {
-        if (($f1 = $qreq->file($name))) {
-            return self::make_uploaded_file($f1, $paperId, $documentType, $conf);
-        } else if (($f2 = $qreq["{$name}:upload"])) {
-            return self::make_capability($f2, $paperId, $documentType, $conf);
+        if (($fu = $qreq["{$name}:upload"])) {
+            return self::make_capability($conf, $fu, $paperId, $documentType);
+        } if (($fi = $qreq->file("{$name}:file") ?? $qreq->file($name) /* XXX obsolete */)) {
+            return self::make_uploaded_file($fi, $paperId, $documentType, $conf);
         } else {
             return null;
         }
@@ -235,6 +299,7 @@ class DocumentInfo implements JsonSerializable {
     /** @return bool */
     static function check_json_upload($j) {
         return is_object($j)
+            && (!isset($j->hash) || is_string($j->hash))
             && (!isset($j->content) || is_string($j->content))
             && (!isset($j->content_base64) || is_string($j->content_base64))
             && (!isset($j->content_file) || is_string($j->content_file));
@@ -262,25 +327,26 @@ class DocumentInfo implements JsonSerializable {
     }
 
     function analyze_content() {
-        $pfx = $this->content_prefix(4096);
-        if ($pfx === false) {
-            return;
-        }
-        $info = Mimetype::content_info($pfx, $this->mimetype);
-        $this->mimetype = $info["type"];
-        if (isset($info["width"]) || isset($info["height"])) {
-            $this->_metadata = $this->metadata() ?? (object) [];
+        if (($info = Mimetype::content_info(null, $this->mimetype, $this))) {
+            $this->mimetype = $info["type"];
             if (isset($info["width"])) {
-                $this->_metadata->width = $info["width"];
+                $this->set_prop("width", $info["width"]);
             }
             if (isset($info["height"])) {
-                $this->_metadata->height = $info["height"];
+                $this->set_prop("height", $info["height"]);
+            }
+            if (str_starts_with($this->mimetype, "video/")
+                || str_starts_with($this->mimetype, "audio/")) {
+                if (isset($info["duration"])) {
+                    $this->set_prop("npages", (int) ($info["duration"] * 10 + 0.5));
+                }
             }
         }
     }
 
 
-    /** @return DocumentInfo */
+    /** @param ?CommentInfo $owner
+     * @return DocumentInfo */
     function with_owner($owner) {
         if ($this->_owner === null) {
             $this->_owner = $owner;
@@ -309,6 +375,7 @@ class DocumentInfo implements JsonSerializable {
         }
     }
 
+    /** @return bool */
     private function find_owner() {
         if ($this->documentType == DTYPE_COMMENT) {
             $this->prow = $this->prow ?? $this->conf->paper_by_id($this->paperId);
@@ -371,24 +438,15 @@ class DocumentInfo implements JsonSerializable {
 
     /** @return bool */
     function ensure_content() {
-        if ($this->content_available()) {
-            return true;
-        }
         // 1. check docstore
-        if ($this->load_docstore()) {
-            return true;
-        }
         // 2. check db
-        $dbNoPapers = $this->conf->opt("dbNoPapers");
-        if (!$dbNoPapers && $this->load_database()) {
-            return true;
-        }
         // 3. check S3
-        if ($this->load_s3()) {
-            return true;
-        }
         // 4. check db as last resort
-        if ($dbNoPapers && $this->load_database()) {
+        if ($this->content_available()
+            || $this->load_docstore()
+            || $this->load_database()
+            || $this->load_s3()
+            || $this->load_database(true)) {
             return true;
         }
         // not found
@@ -396,73 +454,74 @@ class DocumentInfo implements JsonSerializable {
         return false;
     }
 
-    /** @return int|false */
+    /** @return int */
     function content_size() {
-        if (!$this->ensure_content()) {
-            return false;
-        } else if ($this->content !== null) {
-            return strlen($this->content);
-        } else if ($this->content_file !== null) {
-            return filesize($this->content_file);
-        } else if ($this->filestore !== null) {
-            return filesize($this->filestore);
-        } else {
-            return false;
+        $sz = -1;
+        if ($this->ensure_content()) {
+            if ($this->content !== null) {
+                $sz = strlen($this->content);
+            } else if ($this->content_file !== null) {
+                $sz = filesize($this->content_file);
+            } else if ($this->filestore !== null) {
+                $sz = filesize($this->filestore);
+            }
         }
+        return $sz !== false ? $sz : -1;
     }
 
-    /** @return int */
-    function size() {
-        $this->ensure_size();
+    const SIZE_NO_CONTENT = 1;
+    /** @param int $flags
+     * @return int */
+    function size($flags = 0) {
+        if ($this->size < 0) {
+            $this->load_size($flags);
+        }
         return $this->size;
     }
 
-    /** @return bool */
-    function ensure_size() {
-        if ($this->size == 0 && $this->paperStorageId !== 1) {
+    private function load_size($flags) {
+        if (!$this->content_available()
+            && !$this->load_docstore()
+            && !$this->load_database()
+            && ($s3 = $this->conf->s3_client())
+            && $this->has_hash()
+            && ($s3k = $this->s3_key())) {
             // NB This function may be called from `load_s3()`!
             // Avoid a recursive call to `load_s3()` via `head_size()`
-            if ($this->content_available()
-                || $this->load_docstore()
-                || (!$this->conf->opt("dbNoPapers") && $this->load_database())
-                || !$this->check_s3()
-                || ($size = $this->conf->s3_client()->head_size($this->s3_key())) === false) {
-                $size = (int) $this->content_size();
-            }
-            $this->size = $size;
-            if ($this->size != 0 && $this->paperStorageId > 1) {
-                $this->conf->qe("update PaperStorage set size=? where paperId=? and paperStorageId=? and size=0", $this->size, $this->paperId, $this->paperStorageId);
-            }
+            $this->size = $s3->head_size($s3k);
         }
-        return $this->size != 0 || $this->paperStorageId === 1;
-    }
-
-    function reset_size() {
-        $this->size = (int) $this->content_size();
+        if ($this->size < 0 && ($flags & self::SIZE_NO_CONTENT) === 0) {
+            $this->size = $this->content_size();
+        }
+        if ($this->size >= 0 && $this->paperStorageId > 1) {
+            $this->conf->qe("update PaperStorage set size=? where paperId=? and paperStorageId=? and size<=0", $this->size, $this->paperId, $this->paperStorageId);
+        }
     }
 
     /** @param string $fn
      * @param int $expected_size
-     * @return int|false */
+     * @return int */
     static function filesize_expected($fn, $expected_size) {
         $sz = @filesize($fn);
         if ($sz !== $expected_size && $sz !== false) {
             clearstatcache(true, $fn);
             $sz = @filesize($fn);
         }
-        return $sz;
+        return $sz === false ? -2 : $sz;
     }
 
 
     /** @return bool */
     function compressible() {
-        return $this->size() <= 10000000
-            && Mimetype::compressible($this->mimetype);
+        $sz = $this->size();
+        return $sz > 0 && $sz <= 10000000 && Mimetype::compressible($this->mimetype);
     }
 
-    /** @return bool */
-    private function load_database() {
-        if ($this->paperStorageId <= 1) {
+    /** @param bool $ignore_no_papers
+     * @return bool */
+    private function load_database($ignore_no_papers = false) {
+        if ($this->paperStorageId <= 1
+            || (!$ignore_no_papers && $this->conf->opt("dbNoPapers"))) {
             return false;
         }
         $row = $this->conf->fetch_first_row("select paper, compression from PaperStorage where paperId=? and paperStorageId=?", $this->paperId, $this->paperStorageId);
@@ -479,20 +538,20 @@ class DocumentInfo implements JsonSerializable {
 
     /** @return bool */
     private function load_docstore() {
-        $path = Filer::docstore_path($this, Filer::FPATH_EXISTS);
-        if (!$path) {
+        if (!$this->has_hash()
+            || !($path = Filer::docstore_path($this, Filer::FPATH_EXISTS))) {
             return false;
         }
-        if ($this->size != 0) {
+        if ($this->size > 0) {
             $sz = self::filesize_expected($path, $this->size);
             if ($sz !== $this->size
                 && ($s3 = $this->conf->s3_client())
                 && ($s3k = $this->s3_key())
-                && $s3->head_size($s3k) === $this->size()) {
+                && $s3->head_size($s3k) === $this->size) {
                 unlink($path);
                 return false;
             } else if ($sz !== $this->size) {
-                error_log("{$this->conf->dbname}: #{$this->paperId}/{$this->documentType}/{$this->paperStorageId}: bad size $sz, expected $this->size");
+                error_log("{$this->conf->dbname}: #{$this->paperId}/{$this->documentType}/{$this->paperStorageId}: bad size {$sz}, expected {$this->size}");
             }
         }
         $this->filestore = $path;
@@ -510,7 +569,6 @@ class DocumentInfo implements JsonSerializable {
 
     /** @return bool */
     function store_skeleton() {
-        $this->ensure_size();
         if (!$this->timestamp) {
             $this->timestamp = time();
         }
@@ -518,12 +576,12 @@ class DocumentInfo implements JsonSerializable {
             "paperId" => $this->paperId,
             "sha1" => $this->binary_hash(),
             "timestamp" => $this->timestamp,
-            "size" => $this->size,
+            "size" => $this->size(),
             "mimetype" => $this->mimetype,
             "documentType" => $this->documentType,
             "inactive" => 0
         ];
-        if (($this->crc32 || $this->size <= 10000000)
+        if (($this->crc32 || ($this->size >= 0 && $this->size <= 10000000))
             && ($crc32 = $this->crc32()) !== false) {
             $upd["crc32"] = $crc32;
         }
@@ -531,10 +589,19 @@ class DocumentInfo implements JsonSerializable {
             if ($this->$k)
                 $upd[$k] = $this->$k;
         }
+        if ($this->conf->sversion >= 276) {
+            foreach (["npages", "width", "height"] as $k) {
+                if (($this->$k ?? -1) >= 0)
+                    $upd[$k] = $this->$k;
+            }
+        }
         if ($this->_metadata) {
             $upd["infoJson"] = json_encode_db($this->_metadata);
         } else if ($this->infoJson) {
             $upd["infoJson"] = $this->infoJson;
+        }
+        if (($upd["infoJson"] ?? "") === "{}") {
+            unset($upd["infoJson"]);
         }
 
         if ($this->paperStorageId > 1) {
@@ -550,6 +617,7 @@ class DocumentInfo implements JsonSerializable {
 
         if (!Dbl::is_error($result)) {
             Dbl::free($result);
+            $this->_old_prop = null;
             return true;
         } else {
             if ($this->conf->dblink->errno) {
@@ -562,22 +630,23 @@ class DocumentInfo implements JsonSerializable {
 
     /** @return ?bool */
     private function store_database() {
-        if (!$this->conf->opt("dbNoPapers")) {
-            $content = $this->content();
-            for ($p = 0; $p < strlen($content); $p += 400000) {
-                $result = $this->conf->qe("update PaperStorage set paper=concat(coalesce(paper,''),?) where paperId=? and paperStorageId=?", substr($content, $p, 400000), $this->paperId, $this->paperStorageId);
-                if (Dbl::is_error($result)) {
-                    break;
-                }
-                Dbl::free($result);
-            }
-            if ($this->conf->fetch_ivalue("select length(paper) from PaperStorage where paperId=? and paperStorageId=?", $this->paperId, $this->paperStorageId) === strlen($content)) {
-                return true;
-            }
-            $this->message_set()->warning_at(".content", "<0>Internal error while saving document content to database");
-            return false;
+        if ($this->conf->opt("dbNoPapers")) {
+            return null;
         }
-        return null;
+        $content = $this->content();
+        for ($p = 0; $p < strlen($content); $p += 400000) {
+            $result = $this->conf->qe("update PaperStorage set paper=concat(coalesce(paper,''),?) where paperId=? and paperStorageId=?", substr($content, $p, 400000), $this->paperId, $this->paperStorageId);
+            if (Dbl::is_error($result)) {
+                break;
+            }
+            Dbl::free($result);
+        }
+        $ssize = $this->conf->fetch_ivalue("select length(paper) from PaperStorage where paperId=? and paperStorageId=?", $this->paperId, $this->paperStorageId);
+        $ok = $ssize === strlen($content);
+        if (!$ok) {
+            $this->message_set()->warning_at(".content", "<0>Internal error while saving document content to database");
+        }
+        return $ok;
     }
 
     /** @return ?bool */
@@ -615,7 +684,7 @@ class DocumentInfo implements JsonSerializable {
 
     /** @param string $text_hash
      * @param string|Mimetype $mimetype
-     * @return string */
+     * @return non-empty-string */
     static function s3_key_for($text_hash, $mimetype) {
         // Format: `doc/%[2/3]H/%h%x`. Why not algorithm in subdirectory?
         // Because S3 works better if keys are partitionable.
@@ -627,13 +696,12 @@ class DocumentInfo implements JsonSerializable {
         return "doc/{$x}/{$text_hash}" . Mimetype::extension($mimetype);
     }
 
-    /** @return ?string */
+    /** @return ?non-empty-string */
     function s3_key() {
-        if (($hash = $this->text_hash()) !== false) {
-            return self::s3_key_for($hash, $this->mimetype);
-        } else {
+        if (($hash = $this->text_hash()) === false) {
             return null;
         }
+        return self::s3_key_for($hash, $this->mimetype);
     }
 
     private function s3_upgrade_extension(S3Client $s3, $s3k) {
@@ -673,21 +741,22 @@ class DocumentInfo implements JsonSerializable {
     }
 
     /** @return bool */
-    function load_s3() {
-        if (($s3 = $this->conf->s3_client())
-            && ($s3k = $this->s3_key())) {
-            $dspath = Filer::docstore_path($this, Filer::FPATH_MKDIR);
-            if (function_exists("curl_init")) {
-                $stream = $dspath ? self::fopen_docstore($dspath) : null;
-                $s3l = $s3->start_curl_get($s3k)
-                    ->set_response_body_stream($stream)
-                    ->set_expected_size($this->size());
-                $s3l->run();
-                return $this->handle_load_s3_curl($s3l, $stream ? $dspath : null);
-            }
-            return $this->load_s3_direct($s3, $s3k, $dspath);
-        } else {
+    private function load_s3() {
+        if (!($s3 = $this->conf->s3_client())
+            || !$this->has_hash()
+            || !($s3k = $this->s3_key())) {
             return false;
+        }
+        $dspath = Filer::docstore_path($this, Filer::FPATH_MKDIR);
+        if (function_exists("curl_init")) {
+            $stream = $dspath ? self::fopen_docstore($dspath) : null;
+            $s3l = $s3->start_curl_get($s3k)
+                ->set_response_body_stream($stream)
+                ->set_timeout_size($this->size(self::SIZE_NO_CONTENT));
+            $s3l->run();
+            return $this->handle_load_s3_curl($s3l, $stream ? $dspath : null);
+        } else {
+            return $this->load_s3_direct($s3, $s3k, $dspath);
         }
     }
 
@@ -713,7 +782,8 @@ class DocumentInfo implements JsonSerializable {
             return true;
         }
         $s3l->close_response_body_stream();
-        if (($sz = self::filesize_expected("{$dspath}~", $this->size)) !== $this->size) {
+        $sz = self::filesize_expected("{$dspath}~", $this->size);
+        if ($sz !== $this->size) {
             error_log("Disk error: GET {$s3l->skey}: expected size {$this->size}, got " . json_encode($sz));
             $s3l->status = 500;
         } else if (rename("{$dspath}~", $dspath)) {
@@ -760,46 +830,56 @@ class DocumentInfo implements JsonSerializable {
                 || ($this->s3_upgrade_extension($s3, $s3k) && $s3->head($s3k)));
     }
 
-    /** @return ?bool */
-    function store_s3() {
-        if (($s3 = $this->conf->s3_client())
-            && ($s3k = $this->s3_key())) {
-            $meta = ["conf" => $this->conf->dbname, "pid" => $this->paperId, "dtype" => $this->documentType];
-            if ($this->filterType) {
-                $meta["filtertype"] = $this->filterType;
-                if ($this->sourceHash != "") {
-                    $meta["sourcehash"] = Filer::hash_as_text($this->sourceHash);
-                }
-            }
-            if (($m = $this->metadata())) {
-                if (isset($m->width)) {
-                    $meta["width"] = $m->width;
-                }
-                if (isset($m->height)) {
-                    $meta["height"] = $m->height;
-                }
-                if (isset($m->npages)) {
-                    $meta["npages"] = $m->npages;
-                }
-            }
-            $user_data = ["hotcrp" => json_encode_db($meta)];
-
-            if ($s3->head_size($s3k) === $this->size()
-                || (($path = $this->available_content_file())
-                    && $s3->put_file($s3k, $path, $this->mimetype, $user_data))) {
-                return true;
-            }
-
-            $r = $s3->start_put($s3k, $this->content(), $this->mimetype, $user_data)->run();
-            if ($r->status === 200) {
-                return true;
-            } else {
-                error_log("S3 error: POST $s3k: $r->status $r->status_text " . json_encode_db($r->response_headers));
-                $this->message_set()->warning_at(".content", "<0>Internal error while saving document to S3");
-                return false;
+    /** @return array<string,string> */
+    function s3_user_data() {
+        $meta = [
+            "conf" => $this->conf->dbname,
+            "pid" => $this->paperId,
+            "dtype" => $this->documentType
+        ];
+        if ($this->filterType) {
+            $meta["filtertype"] = $this->filterType;
+            if ($this->sourceHash != "") {
+                $meta["sourcehash"] = Filer::hash_as_text($this->sourceHash);
             }
         }
-        return null;
+        if (($this->npages ?? -1) >= 0) {
+            $meta["npages"] = $this->npages;
+        }
+        if (($this->width ?? -1) >= 0) {
+            $meta["width"] = $this->width;
+        }
+        if (($this->height ?? -1) >= 0) {
+            $meta["height"] = $this->height;
+        }
+        return ["hotcrp" => json_encode_db($meta)];
+    }
+
+    /** @return ?bool */
+    function store_s3() {
+        if (!($s3 = $this->conf->s3_client())
+            || !($s3k = $this->s3_key())) {
+            return null;
+        }
+
+        if ($s3->head_size($s3k) === $this->size()) {
+            return true;
+        }
+
+        $user_data = $this->s3_user_data();
+        if (($path = $this->available_content_file())
+            && $s3->put_file($s3k, $path, $this->mimetype, $user_data)) {
+            return true;
+        }
+
+        $r = $s3->start_put($s3k, $this->content(), $this->mimetype, $user_data)->run();
+        if ($r->status === 200) {
+            return true;
+        } else {
+            error_log("S3 error: POST {$s3k}: {$r->status} {$r->status_text} " . json_encode_db($r->response_headers));
+            $this->message_set()->warning_at(".content", "<0>Internal error while saving document to S3");
+            return false;
+        }
     }
 
 
@@ -821,13 +901,15 @@ class DocumentInfo implements JsonSerializable {
                 $m = $this->metadata();
                 $this->infoJson = $row[5];
                 $this->_metadata = null;
-                if ($m) {
+                if (!empty((array) $m)) {
                     $this->infoJson = json_object_replace_recursive($this->infoJson, $m);
                     $qf[] = "infoJson=?";
                     $qv[] = $this->infoJson;
                 }
                 if (!empty($qf)) {
-                    $this->conf->qe("update PaperStorage set " . join(",", $qf) . " where paperId=? and paperStorageId=?", $this->paperId, $this->paperStorageId, ...$qv);
+                    $qv[] = $this->paperId;
+                    $qv[] = $this->paperStorageId;
+                    $this->conf->qe_apply("update PaperStorage set " . join(",", $qf) . " where paperId=? and paperStorageId=?", $qv);
                 }
                 return true;
             }
@@ -933,9 +1015,14 @@ class DocumentInfo implements JsonSerializable {
         return Filer::$tempdir . "/" . $base . Mimetype::extension($this->mimetype);
     }
 
+    /** @return bool */
+    function has_memory_content() {
+        return $this->content !== null;
+    }
+
     /** @param int $prefix_len
      * @return string|false */
-    function content_prefix($prefix_len = 4096) {
+    function content_prefix($prefix_len) {
         if (!$this->ensure_content()) {
             return false;
         } else if ($this->content !== null) {
@@ -980,7 +1067,7 @@ class DocumentInfo implements JsonSerializable {
 
     /** @return string */
     function content_mimetype() {
-        return Mimetype::content_type($this->content_prefix(), $this->mimetype);
+        return Mimetype::content_type($this->content_prefix(4096), $this->mimetype);
     }
 
 
@@ -1026,7 +1113,7 @@ class DocumentInfo implements JsonSerializable {
                     $stream = $dspath ? self::fopen_docstore($dspath) : null;
                     $s3l = $s3->start_curl_get($s3k)
                         ->set_response_body_stream($stream)
-                        ->set_expected_size($doc->size());
+                        ->set_timeout_size($doc->size());
                     $adocs[] = [$doc, $s3l, 0, $stream ? $dspath : null];
                 }
             }
@@ -1093,10 +1180,12 @@ class DocumentInfo implements JsonSerializable {
         assert($this->sha1 !== null);
         return (bool) $this->sha1;
     }
+
     /** @return string|false */
     function text_hash() {
         return Filer::hash_as_text($this->binary_hash());
     }
+
     /** @return string|false */
     function binary_hash() {
         if ($this->sha1 === "") {
@@ -1104,6 +1193,7 @@ class DocumentInfo implements JsonSerializable {
         }
         return $this->sha1;
     }
+
     /** @return string|false */
     function binary_hash_data() {
         $hash = $this->binary_hash();
@@ -1113,11 +1203,13 @@ class DocumentInfo implements JsonSerializable {
             return substr($hash, strpos($hash, "-") + 1);
         }
     }
+
     /** @return bool */
     function check_text_hash($hash) {
         $my_hash = $this->binary_hash();
         return $my_hash !== false && $my_hash === Filer::hash_as_binary($hash);
     }
+
     /** @return string|false */
     function hash_algorithm() {
         assert($this->has_hash());
@@ -1129,6 +1221,7 @@ class DocumentInfo implements JsonSerializable {
             return false;
         }
     }
+
     /** @return string|false */
     function hash_algorithm_prefix() {
         assert($this->has_hash());
@@ -1140,6 +1233,7 @@ class DocumentInfo implements JsonSerializable {
             return false;
         }
     }
+
     /** @param ?string $like_hash
      * @return HashAnalysis */
     private function hash_algorithm_for($like_hash) {
@@ -1152,6 +1246,7 @@ class DocumentInfo implements JsonSerializable {
         }
         return $ha;
     }
+
     /** @param ?string $like_hash
      * @return string|false */
     function content_binary_hash($like_hash = null) {
@@ -1167,6 +1262,7 @@ class DocumentInfo implements JsonSerializable {
             return false;
         }
     }
+
     /** @param string $file
      * @param ?string $like_hash
      * @return string|false */
@@ -1179,10 +1275,12 @@ class DocumentInfo implements JsonSerializable {
         }
     }
 
+
     /** @return bool */
     function has_crc32() {
         return is_string($this->crc32) && $this->crc32 !== "";
     }
+
     /** @return string|false */
     function crc32() {
         if ($this->crc32 === null && $this->paperStorageId > 0) {
@@ -1211,6 +1309,7 @@ class DocumentInfo implements JsonSerializable {
         }
         return $this->crc32;
     }
+
     /** @return int|false */
     function integer_crc32() {
         if (($s = $this->crc32()) !== false) {
@@ -1256,10 +1355,21 @@ class DocumentInfo implements JsonSerializable {
     const ANY_MEMBER_FILENAME = 1;
 
     /** @return ?string */
+    function error_filename() {
+        if ($this->filename === null || $this->filename === "") {
+            return "(uploaded file)";
+        }
+        return $this->filename;
+    }
+
+    /** @return ?string */
     function member_filename($flags = 0) {
         if (($this->_member_filename ?? "") !== "") {
             return $this->_member_filename;
         } else {
+            if (($flags & self::ANY_MEMBER_FILENAME) === 0) {
+                error_log(debug_string_backtrace());
+            }
             assert(($flags & self::ANY_MEMBER_FILENAME) !== 0);
             return $this->filename;
         }
@@ -1385,7 +1495,7 @@ class DocumentInfo implements JsonSerializable {
         if ($this->documentType == DTYPE_FINAL
             || ($this->documentType > 0
                 && ($o = $this->conf->option_by_id($this->documentType))
-                && $o->final)) {
+                && $o->is_final())) {
             $suffix = "f";
         }
         if ($this->documentType == DTYPE_FINAL
@@ -1412,90 +1522,192 @@ class DocumentInfo implements JsonSerializable {
             $alt = "[" . ($m && $m->description ? $m->description : $this->mimetype) . "]";
         }
 
-        $x = "<a href=\"{$p}\" class=\"q" . ($need_run ? " need-format-check" : "") . '">'
+        $x = "<a href=\"{$p}\" class=\"qo" . ($need_run ? " need-format-check" : "") . '">'
             . Ht::img($img . $suffix . ($small ? "" : "24") . ".png", $alt, ["class" => $small ? "sdlimg" : "dlimg", "title" => $title]);
         if ($html) {
-            $x .= "&nbsp;" . $html;
+            $x .= " <u class=\"x\">{$html}</u>";
         }
-        if (!($flags & self::L_NOSIZE) && $this->size() > 0) {
-            $x .= " <span class=\"dlsize\">" . ($html ? "(" : "")
-                . unparse_byte_size($this->size) . ($html ? ")" : "") . "</span>";
+        if (($flags & self::L_NOSIZE) === 0 && $this->size() > 0) {
+            $size = unparse_byte_size($this->size);
+            if ($html) {
+                $size = "({$size})";
+            }
+            $x .= " <span class=\"dlsize\">{$size}</span>";
         }
-        return $x . "</a>" . ($info ? "&nbsp;$info" : "");
+        return $x . "</a>" . ($info ? " {$info}" : "");
     }
 
     /** @param int $flags
      * @param string $suffix
      * @return array{string,string,bool} */
     private function link_html_format_info($flags, $suffix) {
+        $message = "";
         $need_run = false;
         if (($spects = $this->conf->format_spec($this->documentType)->timestamp)) {
             if ($this->prow->is_primary_document($this)
-                && ($flags & self::L_SMALL)) {
-                $specstatus = $this->prow->pdfFormatStatus;
-                if ($specstatus == -$spects) {
-                    return ["", $suffix . "x", false];
-                } else if ($specstatus == $spects) {
-                    return ["", $suffix, false];
-                }
-            }
-            $runflag = CheckFormat::RUN_NEVER;
-            if (($flags & self::L_REQUIREFORMAT) !== 0) {
-                $runflag = CheckFormat::RUN_IF_NECESSARY;
-            }
-            $cf = new CheckFormat($this->conf, $runflag);
-            $cf->check_document($this);
-            if ($cf->has_problem()) {
-                if ($cf->has_error()) {
+                && ($flags & self::L_SMALL) !== 0) {
+                if ($this->prow->pdfFormatStatus == -$spects) {
                     $suffix .= "x";
                 }
-                if (($flags & self::L_SMALL) || !$cf->check_ok()) {
-                    return ["", $suffix, $cf->need_recheck()];
-                } else {
-                    return ['<span class="need-tooltip" style="font-weight:bold" data-tooltip="' . htmlspecialchars($cf->full_feedback_html()) . '">ⓘ</span>', $suffix, $cf->need_recheck()];
-                }
             } else {
+                $runflag = CheckFormat::RUN_NEVER;
+                if (($flags & self::L_REQUIREFORMAT) !== 0) {
+                    $runflag = CheckFormat::RUN_IF_NECESSARY;
+                }
+                $cf = new CheckFormat($this->conf, $runflag);
+                $cf->check_document($this);
                 $need_run = $cf->need_recheck();
+                if ($cf->has_problem() && $cf->check_ok()) {
+                    if ($cf->has_error()) {
+                        $suffix .= "x";
+                    }
+                    if (($flags & self::L_SMALL) === 0) {
+                        $ffh = htmlspecialchars($cf->full_feedback_html());
+                        $message = "<strong class=\"need-tooltip\" aria-label=\"{$ffh}\">ⓘ</strong>";
+                    }
+                }
             }
         }
-        return ["", $suffix, $need_run];
+        return [$message, $suffix, $need_run];
     }
 
-    /** @return ?object */
+    /** @param string $prop
+     * @param mixed $v */
+    function set_prop($prop, $v) {
+        if (($prop === "npages" || $prop === "width" || $prop === "height")
+            && $this->conf->sversion >= 276) {
+            assert(is_int($v));
+            if ($this->$prop === $v) {
+                return;
+            }
+            $this->_old_prop = $this->_old_prop ?? [];
+            $this->_old_prop[$prop] = $this->$prop;
+            $this->$prop = $v;
+            $v = null;
+        }
+        $m = $this->metadata();
+        if (($m->$prop ?? null) !== $v) {
+            $this->_old_prop["metadata"] = $this->_old_prop["metadata"] ?? (object) [];
+            $this->_old_prop["metadata"]->$prop = $m->$prop ?? null;
+            if ($v !== null) {
+                $m->$prop = $v;
+            } else {
+                unset($m->$prop);
+            }
+        }
+    }
+
+    /** @return bool */
+    function save_prop($quiet = false) {
+        if ($this->paperStorageId <= 1 || empty($this->_old_prop)) {
+            return false;
+        }
+        $qf = $qv = $metadata = [];
+        foreach ($this->_old_prop as $prop => $v) {
+            if ($prop === "metadata") {
+                $m = $this->metadata();
+                foreach ((array) $v as $prop1 => $v1) {
+                    $metadata[$prop1] = $m->$prop1 ?? null;
+                }
+            } else {
+                $qf[] = "{$prop}=?";
+                $qv[] = $this->$prop;
+            }
+        }
+        $qv[] = $this->paperId;
+        $qv[] = $this->paperStorageId;
+        if (empty($metadata)) {
+            $result = $this->conf->qe("update PaperStorage set " . join(", ", $qf) . " where paperId=? and paperStorageId=?", ...$qv);
+            $ok = !Dbl::is_error($result);
+        } else {
+            $ok = true;
+            $qf[] = "infoJson=?{desired}";
+            $ijstr = Dbl::compare_exchange($this->conf->dblink,
+                "select infoJson from PaperStorage where paperId=? and paperStorageId=?",
+                [$this->paperId, $this->paperStorageId],
+                function ($oldstr) use ($metadata, &$ok) {
+                    $newstr = json_object_replace_recursive($oldstr, $metadata);
+                    $ok = $newstr === null || strlen($newstr) <= 32768;
+                    return $ok ? $newstr : $oldstr;
+                },
+                "update PaperStorage set " . join(", ", $qf) . " where paperId=? and paperStorageId=? and infoJson?{expected}e",
+                $qv);
+            $this->infoJson = $ijstr;
+            $this->_metadata = null;
+            if (!$ok && !$quiet) {
+                error_log(caller_landmark() . ": {$this->conf->dbname}: save_prop(paper {$this->paperId}, dt {$this->documentType}): infoJson too long, delta " . json_encode($metadata));
+            }
+        }
+        return $ok;
+    }
+
+    function abort_prop() {
+        foreach ($this->_old_prop ?? [] as $prop => $v) {
+            if ($prop === "metadata") {
+                $m = $this->metadata();
+                foreach ((array) $v as $prop1 => $v1) {
+                    if ($v1 !== null) {
+                        $m->$prop1 = $v1;
+                    } else {
+                        unset($m->$prop1);
+                    }
+                }
+            } else {
+                $this->$prop = $v;
+            }
+        }
+        $this->_old_prop = null;
+    }
+
+    function prop_update() {
+        $j = [];
+        foreach ($this->_old_prop ?? [] as $prop => $v) {
+            if ($prop === "metadata") {
+                $m = $this->metadata();
+                foreach ((array) $v as $prop1 => $v1) {
+                    $j[$prop1] = $m->$prop1 ?? null;
+                }
+            } else {
+                $j[$prop] = $this->$prop;
+            }
+        }
+        return $j;
+    }
+
+    function load_metadata() {
+        if ($this->paperStorageId > 0) {
+            $row = Dbl::fetch_first_object($this->conf->dblink,
+                    "select " . $this->conf->document_metadata_query_fields() . " from PaperStorage where paperId=? and paperStorageId=?",
+                    $this->paperId, $this->paperStorageId)
+                ?? (object) ["infoJson" => null, "npages" => -1, "width" => -1, "height" => -1];
+            foreach ((array) $row as $prop => $v) {
+                if ($prop !== "infoJson") {
+                    $v = (int) $v;
+                }
+                $this->$prop = $v;
+            }
+            $this->_metadata = null;
+        }
+    }
+
+    /** @return object */
     function metadata() {
-        if ($this->_metadata === null && $this->infoJson !== null) {
+        if ($this->_metadata === null) {
             if ($this->infoJson === false && $this->paperStorageId > 0) {
-                $this->infoJson = Dbl::fetch_value($this->conf->dblink, "select infoJson from PaperStorage where paperId=? and paperStorageId=?", $this->paperId, $this->paperStorageId);
+                $this->load_metadata();
             }
-            if ($this->infoJson) {
-                $this->_metadata = json_decode($this->infoJson);
-            }
+            $this->_metadata = ($this->infoJson ? json_decode($this->infoJson) : null) ?? (object) [];
         }
         return $this->_metadata;
     }
 
-    /** @return bool */
+    /** @return bool
+     * @deprecated */
     function update_metadata($delta, $quiet = false) {
-        if ($this->paperStorageId <= 1) {
-            return false;
+        foreach ($delta as $prop => $v) {
+            $this->set_prop($prop, $v);
         }
-        $length_ok = true;
-        $ijstr = Dbl::compare_and_swap($this->conf->dblink,
-            "select infoJson from PaperStorage where paperId=? and paperStorageId=?",
-            [$this->paperId, $this->paperStorageId],
-            function ($oldstr) use ($delta, &$length_ok) {
-                $newstr = json_object_replace_recursive($oldstr, $delta);
-                $length_ok = $newstr === null || strlen($newstr) <= 32768;
-                return $length_ok ? $newstr : $oldstr;
-            },
-            "update PaperStorage set infoJson=?{desired} where paperId=? and paperStorageId=? and infoJson?{expected}e",
-            [$this->paperId, $this->paperStorageId]);
-        $this->infoJson = $ijstr;
-        $this->_metadata = null;
-        if (!$length_ok && !$quiet) {
-            error_log(caller_landmark() . ": {$this->conf->dbname}: update_metadata(paper $this->paperId, dt $this->documentType): delta too long, delta " . json_encode($delta));
-        }
-        return $length_ok;
+        return $this->save_prop();
     }
 
     /** @return bool */
@@ -1513,15 +1725,34 @@ class DocumentInfo implements JsonSerializable {
     /** @param ?CheckFormat $cf
      * @return ?int */
     function npages(CheckFormat $cf = null) {
-        if ($this->mimetype && $this->mimetype !== "application/pdf") {
+        if (($this->mimetype && $this->mimetype !== "application/pdf")
+            || $this->npages === -1000000) {
             return null;
-        } else if (($m = $this->metadata()) && isset($m->npages)) {
-            return $m->npages;
-        } else {
-            $cf = $cf ?? new CheckFormat($this->conf);
-            $cf->check_document($this);
-            return $cf->npages;
         }
+        if ($this->npages === null) {
+            $this->load_metadata();
+        }
+        if ($this->npages < 0 && $this->infoJson) {
+            $m = $this->metadata();
+            if (isset($m->npages) && is_int($m->npages)) {
+                $this->set_prop("npages", $m->npages);
+                $this->save_prop();
+            }
+        }
+        if ($this->npages < 0) {
+            // prevent recursive computation of npages
+            $this->npages = -1000000;
+
+            $cfx = $cf ?? new CheckFormat($this->conf);
+            $cfx->check_document($this);
+
+            // if default format checker fails, it will not succeed later;
+            // if non-default format checker fails, default might succeed
+            if ($this->npages === -1000000 && $cf) {
+                $this->npages = -1;
+            }
+        }
+        return $this->npages >= 0 ? $this->npages : null;
     }
 
     /** @param ?CheckFormat $cf
@@ -1536,7 +1767,23 @@ class DocumentInfo implements JsonSerializable {
         }
     }
 
-    /** @param array{attachment?:bool,no_accel?:bool,cacheable?:bool} $opts
+    /** @return ?int */
+    function width() {
+        if ($this->width === null) {
+            $this->load_metadata();
+        }
+        return $this->width >= 0 ? $this->width : null;
+    }
+
+    /** @return ?int */
+    function height() {
+        if ($this->height === null) {
+            $this->load_metadata();
+        }
+        return $this->height >= 0 ? $this->height : null;
+    }
+
+    /** @param ?Downloader $dopt
      * @return bool */
     function download($opts = [], $user = null) {
         if(($this->conf->settings["conflict_completelyhide"] ?? null) && $this->prow->conflictType > 0 && $opts["isAuthor"] != 1 && $opts["isPrivChair"] != 1) {
@@ -1545,20 +1792,25 @@ class DocumentInfo implements JsonSerializable {
             die('Error 403 - Forbidden');
         }
         
-        if ($this->size == 0 && !$this->ensure_size()) {
+        if ($this->size <= 0 && !$this->ensure_size()) {
             $this->message_set()->warning_at(null, "<0>Empty file");
             return false;
         }
 
-        if (isset($opts["if-none-match"])
-            && $this->has_hash()
-            && $opts["if-none-match"] === "\"" . $this->text_hash() . "\"") {
-            header("HTTP/1.1 304 Not Modified");
-            return true;
+        $dopt = $dopt ?? new Downloader;
+        if ($this->has_hash()) {
+            $dopt->etag = "\"{$this->text_hash()}\"";
+            if ($dopt->run_match()) {
+                return true;
+            }
         }
 
-        $no_accel = $opts["no_accel"] ?? false;
-        $s3_accel = $no_accel ? false : $this->s3_accel_redirect();
+        $s3_accel = false;
+        if (!$dopt->no_accel && $dopt->range === null) {
+            // do not forward range requests to S3 -- there are a lot of them
+            // and they can get rate limited
+            $s3_accel = $this->s3_accel_redirect();
+        }
         if (!$s3_accel && !$this->ensure_content()) {
             if (!$this->has_error()) {
                 $this->error("Document cannot be prepared for download");
@@ -1567,36 +1819,34 @@ class DocumentInfo implements JsonSerializable {
         }
 
         // Print headers
-        $mimetype = Mimetype::type_with_charset($this->mimetype);
-        if (isset($opts["attachment"])) {
-            $attachment = $opts["attachment"];
-        } else {
-            $attachment = !Mimetype::disposition_inline($this->mimetype);
-        }
+        $dopt->mimetype = Mimetype::type_with_charset($this->mimetype);
+        $attachment = $dopt->attachment ?? !Mimetype::disposition_inline($this->mimetype);
         $downloadname = $this->export_filename();
         if (($slash = strrpos($downloadname, "/")) !== false) {
             $downloadname = substr($downloadname, $slash + 1);
         }
         header("Content-Disposition: " . ($attachment ? "attachment" : "inline") . "; filename=" . mime_quote_string($downloadname));
-        if ($opts["cacheable"] ?? false) {
+        if ($dopt->cacheable) {
             header("Cache-Control: max-age=315576000, private");
             header("Expires: " . gmdate("D, d M Y H:i:s", Conf::$now + 315576000) . " GMT");
         }
         // reduce likelihood of XSS attacks in IE
         header("X-Content-Type-Options: nosniff");
-        if ($this->has_hash()) {
-            $opts["etag"] = "\"" . $this->text_hash() . "\"";
+
+        // Maybe log
+        if ($dopt->log_user && $dopt->range_overlaps(0, 4096)) {
+            DocumentInfo::log_download_activity([$this], $dopt->log_user);
         }
 
         // Download or redirect
         if ($s3_accel) {
-            header("Content-Type: {$mimetype}");
-            header("ETag: " . $opts["etag"]);
+            header("Content-Type: {$dopt->mimetype}");
+            header("ETag: {$dopt->etag}");
             $this->conf->s3_client()->get_accel_redirect($this->s3_key(), $s3_accel);
         } else if (($path = $this->available_content_file())) {
-            Filer::download_file($path, $mimetype, $opts);
+            $dopt->output_file($path);
         } else {
-            Filer::download_string($this->content, $mimetype, $opts);
+            $dopt->output_string($this->content);
         }
         return true;
     }
@@ -1613,7 +1863,7 @@ class DocumentInfo implements JsonSerializable {
         if ($this->mimetype) {
             $x["mimetype"] = $this->mimetype;
         }
-        if ($this->size) {
+        if ($this->size >= 0) {
             $x["size"] = $this->size;
         }
         if ($this->has_hash()) {
@@ -1659,7 +1909,7 @@ class DocumentInfo implements JsonSerializable {
             foreach ($byn as $dtype => $pidm) {
                 $opt = $user->conf->option_by_id($dtype);
                 $name = $opt ? $opt->json_key() : "opt{$dtype}";
-                $user->log_activity_dedup("Download $name", array_values(array_unique($pidm)));
+                $user->log_activity_dedup("Download {$name}", array_values(array_unique($pidm)));
             }
         }
     }

@@ -16,12 +16,13 @@ class QuicklinksRenderer {
             $paperText = "#{$id}";
             $urlrest["p"] = $id;
         }
-        return "<a id=\"quicklink-" . ($isprev ? "prev" : "next")
-            . "\" class=\"ulh pnum\" href=\"" . $qreq->conf()->hoturl($baseUrl, $urlrest) . "\">"
-            . ($isprev ? Icons::ui_linkarrow(3) : "")
-            . $paperText
-            . ($isprev ? "" : Icons::ui_linkarrow(1))
-            . "</a>";
+        $url = $qreq->conf()->hoturl($baseUrl, $urlrest);
+        $icon = Icons::ui_linkarrow($isprev ? 3 : 1);
+        if ($isprev) {
+            return "<a id=\"n-prev\" class=\"ulh pnum\" href=\"{$url}\">{$icon}{$paperText}</a>";
+        } else {
+            return "<a id=\"n-next\" class=\"ulh pnum\" href=\"{$url}\">{$paperText}{$icon}</a>";
+        }
     }
 
     /** @param Qrequest $qreq
@@ -32,9 +33,9 @@ class QuicklinksRenderer {
         }
         $x = Ht::form($qreq->conf()->hoturl($baseUrl ?? "paper"), ["method" => "get", "class" => "gopaper"]);
         if ($baseUrl === "profile") {
-            $x .= Ht::entry("u", "", ["id" => "quicklink-search", "size" => 15, "placeholder" => "User search", "aria-label" => "User search", "class" => "usersearch need-autogrow", "spellcheck" => false]);
+            $x .= Ht::entry("u", "", ["id" => "n-search", "size" => 15, "placeholder" => "User search", "aria-label" => "User search", "class" => "usersearch need-autogrow", "spellcheck" => false, "autocomplete" => "off"]);
         } else {
-            $x .= Ht::entry("q", "", ["id" => "quicklink-search", "size" => 10, "placeholder" => "(All)", "aria-label" => "Search", "class" => "papersearch need-suggest need-autogrow", "spellcheck" => false]);
+            $x .= Ht::entry("q", "", ["id" => "n-search", "size" => 10, "placeholder" => "(All)", "aria-label" => "Search", "class" => "papersearch need-suggest need-autogrow", "spellcheck" => false, "autocomplete" => "off"]);
         }
         foreach ($args as $k => $v) {
             $x .= Ht::hidden($k, $v);
@@ -85,9 +86,9 @@ class QuicklinksRenderer {
                 $d = htmlspecialchars($list->description);
                 $url = $list->full_site_relative_url($user);
                 if ($url) {
-                    $x .= '<a id="quicklink-list" class="ulh" href="' . htmlspecialchars($qreq->navigation()->siteurl() . $url) . "\">{$d}</a>";
+                    $x .= '<a id="n-list" class="ulh" href="' . htmlspecialchars($qreq->navigation()->siteurl() . $url) . "\">{$d}</a>";
                 } else {
-                    $x .= "<span id=\"quicklink-list\">{$d}</span>";
+                    $x .= "<span id=\"n-list\">{$d}</span>";
                 }
             }
             if (($next = $list->neighbor_id(1)) !== false) {
@@ -96,7 +97,7 @@ class QuicklinksRenderer {
             $x .= '</td>';
 
             if ($user->is_track_manager() && $listtype === "p") {
-                $x .= '<td id="tracker-connect" class="vbar"><a id="tracker-connect-btn" class="ui js-tracker tbtn need-tooltip" href="" aria-label="Start meeting tracker">&#9759;</a><td>';
+                $x .= '<td id="tracker-connect" class="vbar"><button type="button" id="tracker-connect-btn" class="ui js-tracker tbtn need-tooltip" aria-label="Start meeting tracker">&#9759;</button></td>';
             }
         }
 
@@ -105,6 +106,6 @@ class QuicklinksRenderer {
             $x .= '<td class="vbar gopaper">' . self::quicksearch_form($qreq, $goBase, $xmode) . '</td>';
         }
 
-        return '<table class="vbar"><tr>' . $x . '</tr></table>';
+        return '<table id="p-quicklinks"><tr>' . $x . '</tr></table>';
     }
 }

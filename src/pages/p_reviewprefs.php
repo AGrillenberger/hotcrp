@@ -16,17 +16,17 @@ class ReviewPrefs_Page {
                 if (str_ends_with($k, $suffix)) {
                     $k = substr($k, 0, -strlen($suffix));
                 }
-                if (($p = cvtint(substr($k, 7))) > 0) {
+                if (($p = stoi(substr($k, 7)) ?? -1) > 0) {
                     $csvg->add_row([$p, $reviewer->email, $v]);
                 }
             }
         }
         if ($csvg->is_empty()) {
-            $user->conf->feedback_msg([new MessageItem(null, "<0>No changes", MessageSet::MARKED_NOTE)]);
+            $user->conf->feedback_msg([new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE)]);
             return;
         }
 
-        $aset = new AssignmentSet($user, true);
+        $aset = (new AssignmentSet($user))->set_override_conflicts(true);
         $aset->parse($csvg->unparse());
         $ok = $aset->execute();
         $ok && $aset->prepend_msg("<0>Preferences saved", MessageSet::SUCCESS);
@@ -51,11 +51,12 @@ class ReviewPrefs_Page {
     static function print($user, $reviewer, $qreq) {
         $conf = $user->conf;
 
-        $qreq->print_header("Review preferences", "revpref");
+        $qreq->print_header("Review preferences", "reviewprefs");
 
-        if (($prefdesc = $conf->_id("revprefdescription", "", $conf->has_topics()))) {
+        $targ = new FmtArg("topics", $conf->has_topics());
+        if (($prefdesc = $conf->_i("revprefdescription", $targ))) {
             echo '<div class="msg demargin remargin-left remargin-right">',
-                $prefdesc, '</div>';
+                Ftext::as(5, $prefdesc), '</div>';
         }
 
         $search = (new PaperSearch($user, [
@@ -63,20 +64,20 @@ class ReviewPrefs_Page {
         ]))->set_urlbase("reviewprefs");
         $pl = new PaperList("pf", $search, ["sort" => true], $qreq);
         $pl->apply_view_report_default();
-        $pl->apply_view_session();
-        $pl->apply_view_qreq();
-        $pl->set_table_id_class("foldpl", "pltable-fullw remargin-left remargin-right", "p#");
-        $pl->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_FOOTER | PaperList::DECOR_LIST);
+        $pl->apply_view_session($qreq);
+        $pl->apply_view_qreq($qreq);
+        $pl->set_table_id_class("pl", null, "p#");
+        $pl->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_FOOTER | PaperList::DECOR_LIST | PaperList::DECOR_FULLWIDTH);
         $pl->set_table_fold_session("pfdisplay.");
 
         // display options
         echo Ht::form($conf->hoturl("reviewprefs"), [
-            "method" => "get", "id" => "searchform",
-            "class" => "mb-3 has-fold fold10" . ($pl->viewing("authors") ? "o" : "c")
+            "method" => "get", "id" => "f-search",
+            "class" => "tlcontainer mb-3 has-fold fold10" . ($pl->viewing("authors") ? "o" : "c")
         ]);
 
         if ($user->privChair) {
-            echo '<div class="entryi"><label for="htctl-prefs-user">User</label>';
+            echo '<div class="entryi"><label for="k-prefs-user">User</label>';
 
             $prefcount = [];
             $result = $conf->qe_raw("select contactId, count(*) from PaperReviewPreference where preference!=0 or expertise is not null group by contactId");
@@ -93,14 +94,15 @@ class ReviewPrefs_Page {
                 $sel[$reviewer->email] = $reviewer->name_h(NAME_P|NAME_S) . " &nbsp; [" . ($prefcount[$reviewer->contactId] ?? 0) . "; not on PC]";
             }
 
-            echo Ht::select("reviewer", $sel, $reviewer->email, ["id" => "htctl-prefs-user"]), '</div>';
-            Ht::stash_script('$("#searchform select[name=reviewer]").on("change", function () { $("#searchform")[0].submit() })');
+            echo Ht::select("reviewer", $sel, $reviewer->email, ["id" => "k-prefs-user"]), '</div>';
+            Ht::stash_script('$("#f-search select[name=reviewer]").on("change", function () { $$("f-search").submit() })');
         }
 
-        echo '<div class="entryi"><label for="htctl-prefs-q">Search</label><div class="entry">',
+        echo '<div class="entryi"><label for="k-prefs-q">Search</label><div class="entry">',
             Ht::entry("q", $qreq->q, [
-                "id" => "htctl-prefs-q", "size" => 32, "placeholder" => "(All)",
-                "class" => "papersearch want-focus need-suggest", "spellcheck" => false
+                "id" => "k-prefs-q", "size" => 32, "placeholder" => "(All)",
+                "class" => "papersearch want-focus need-suggest",
+                "spellcheck" => false, "autocomplete" => "off"
             ]), '  ', Ht::submit("redisplay", "Redisplay"), '</div></div>';
 
         $show_data = [];
@@ -140,7 +142,7 @@ class ReviewPrefs_Page {
         if ($qreq->sort) {
             $hoturl_args["sort"] = $qreq->sort;
         }
-        echo Ht::form($conf->hoturl("=reviewprefs", $hoturl_args), ["id" => "sel", "class" => "ui-submit js-submit-paperlist assignpc"]),
+        echo Ht::form($conf->hoturl("=reviewprefs", $hoturl_args), ["id" => "sel", "class" => "ui-submit js-submit-list assignpc"]),
             Ht::hidden("defaultfn", ""),
             Ht::hidden_default_submit("default", 1);
         if ($search->has_message()) {

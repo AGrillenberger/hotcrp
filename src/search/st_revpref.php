@@ -29,15 +29,16 @@ class RevprefSearchMatcher extends ContactCountMatcher {
             return join(" and ", $where);
         }
     }
-    function test_preference($pref) {
+    /** @param PaperReviewPreference $pf */
+    function test_preference($pf) {
         if ($this->is_any) {
-            return $pref[0] != 0 || $pref[1] !== null;
+            return $pf->exists();
         } else {
             return (!$this->preference_match
-                    || $this->preference_match->test($pref[0]))
+                    || $this->preference_match->test($pf->preference))
                 && (!$this->expertise_match
-                    || ($pref[1] !== null
-                        && $this->expertise_match->test($pref[1])));
+                    || ($pf->expertise !== null
+                        && $this->expertise_match->test($pf->expertise)));
         }
     }
 }
@@ -142,7 +143,7 @@ class Revpref_SearchTerm extends SearchTerm {
         }
         return $this->rpsm->test($n);
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

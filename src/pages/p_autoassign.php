@@ -1,6 +1,6 @@
 <?php
 // pages/p_autoassign.php -- HotCRP automatic paper assignment page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Autoassign_Page {
     /** @var Conf */
@@ -29,7 +29,7 @@ class Autoassign_Page {
         if ($this->user->privChair
             && !isset($qreq->t)
             && $qreq->a === "prefconflict"
-            && $this->conf->can_pc_view_incomplete()) {
+            && $this->conf->can_pc_view_some_incomplete()) {
             $qreq->t = "all";
         }
         $limits = PaperSearch::viewable_manager_limits($this->user);
@@ -87,8 +87,8 @@ class Autoassign_Page {
             $pcm = $this->conf->pc_members();
             $bpnum = 1;
             for ($i = 0; $i < count($x) - 1; $i += 2) {
-                $xa = cvtint($x[$i]);
-                $xb = cvtint($x[$i + 1]);
+                $xa = stoi($x[$i]) ?? -1;
+                $xb = stoi($x[$i + 1]) ?? -1;
                 if (isset($pcm[$xa]) && isset($pcm[$xb])) {
                     $qreq["bpa{$bpnum}"] = $pcm[$xa]->email;
                     $qreq["bpb{$bpnum}"] = $pcm[$xb]->email;
@@ -153,7 +153,8 @@ class Autoassign_Page {
     }
 
     private function handle_download_assignment() {
-        $assignset = new AssignmentSet($this->user, true);
+        $assignset = new AssignmentSet($this->user);
+        $assignset->set_override_conflicts(true);
         $assignset->enable_papers($this->ssel->selection());
         $assignset->parse($this->qreq->assignment);
         $csvg = $this->conf->make_csvg("assignments");
@@ -162,7 +163,8 @@ class Autoassign_Page {
     }
 
     private function handle_execute() {
-        $assignset = new AssignmentSet($this->user, true);
+        $assignset = new AssignmentSet($this->user);
+        $assignset->set_override_conflicts(true);
         $assignset->enable_papers($this->ssel->selection());
         $assignset->parse($this->qreq->assignment);
         $assignset->execute(true);
@@ -282,7 +284,7 @@ class Autoassign_Page {
             echo '</td><td class="lentry">', $this->bp_selector($i, "a"),
                 " &nbsp;and&nbsp; ", $this->bp_selector($i, "b");
             if ($i == 1) {
-                echo ' &nbsp;to the same paper &nbsp;(<a class="ui js-badpairs-row more" href="#">More</a> &nbsp;·&nbsp; <a class="ui js-badpairs-row less" href="#">Fewer</a>)';
+                echo ' &nbsp;to the same paper &nbsp;(<button type="button" class="link ui js-badpairs-row more">More</button> &nbsp;·&nbsp; <button type="button" class="link ui js-badpairs-row less">Fewer</button>)';
             }
             echo "</td></tr>\n";
         }
@@ -325,7 +327,10 @@ class Autoassign_Page {
 
 
         // open form
-        echo Ht::form($conf->hoturl("=autoassign", ["profile" => $qreq->profile, "seed" => $qreq->seed, "XDEBUG_PROFILE" => $qreq->XDEBUG_PROFILE]), ["id" => "autoassignform"]),
+        echo Ht::form($conf->hoturl("=autoassign", ["profile" => $qreq->profile, "seed" => $qreq->seed, "XDEBUG_PROFILE" => $qreq->XDEBUG_PROFILE]), [
+                "id" => "autoassignform",
+                "class" => "need-diff-check ui-submit js-autoassign-prepare"
+            ]),
             '<div class="helpside"><div class="helpinside">
         Assignment methods:
         <ul><li><a href="', $conf->hoturl("autoassign"), '" class="q"><strong>Automatic</strong></a></li>
@@ -341,7 +346,7 @@ class Autoassign_Page {
           <dt>', review_type_icon(REVIEW_PC), ' Optional</dt><dd>May be declined</dd>
           <dt>', review_type_icon(REVIEW_META), ' Metareview</dt><dd>Can view all other reviews before completing their own</dd></dl>
         </div></div>', "\n";
-        echo Ht::unstash_script("hotcrp.highlight_form_children(\"#autoassignform\")");
+        echo Ht::unstash_script("\$(\"#autoassignform\").awaken()");
 
 
         // paper selection
@@ -351,7 +356,8 @@ class Autoassign_Page {
                 "id" => "autoassignq", "placeholder" => "(All)",
                 "size" => 40, "aria-label" => "Search",
                 "class" => $this->ms->control_class("q", "papersearch js-autosubmit need-suggest"),
-                "data-submit-fn" => "requery", "spellcheck" => false
+                "data-submit-fn" => "requery",
+                "spellcheck" => false, "autocomplete" => "off"
             ]), " &nbsp;in &nbsp;",
             PaperSearch::limit_selector($conf, PaperSearch::viewable_manager_limits($this->user), $qreq->t),
             " &nbsp; ", Ht::submit("requery", "List", ["id" => "requery"]);
@@ -405,7 +411,7 @@ class Autoassign_Page {
         $tagsjson = [];
         foreach ($conf->pc_members() as $pc) {
             $tagsjson[$pc->contactId] = strtolower($pc->viewable_tags($this->user))
-                . ($pc->disablement ? "" : " enabled#0");
+                . ($pc->is_dormant() ? "" : " enabled#0");
         }
         Ht::stash_script("var hotcrp_pc_tags=" . json_encode($tagsjson) . ";");
         foreach ($conf->viewable_user_tags($this->user) as $pctag) {

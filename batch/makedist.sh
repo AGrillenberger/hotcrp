@@ -2,7 +2,7 @@ export VERSION=3.0b3
 
 # check that schema.sql and updateschema.php agree on schema version
 updatenum=`grep 'settings.*allowPaperOption.*=\|update_schema_version' src/updateschema.php | tail -n 1 | sed 's/.*= *//;s/.*[(] *//;s/[;)].*//'`
-schemanum=`grep 'allowPaperOption' src/schema.sql | sed 's/.*, *//;s/).*//'`
+schemanum=`grep 'allowPaperOption' src/schema.sql | sed 's/, *null).*//i;s/.*, *//;s/).*//'`
 if [ "$updatenum" != "$schemanum" ]; then
     echo "error: allowPaperOption schema number in src/schema.sql ($schemanum)" 1>&2
     echo "error: differs from number in src/updateschema.php ($updatenum)" 1>&2
@@ -118,13 +118,14 @@ etc/optiontypes.json
 etc/pages.json
 etc/papercolumns.json
 etc/profilegroups.json
+etc/reviewfieldlibrary.json
 etc/reviewfieldtypes.json
-etc/reviewformlibrary.json
 etc/sample.pdf
 etc/searchkeywords.json
 etc/settingdescriptions.md
 etc/settinginfo.json
 etc/settinggroups.json
+etc/submissionfieldlibrary.json
 
 lib/.htaccess
 lib/abbreviationmatcher.php
@@ -148,12 +149,14 @@ lib/fmt.php
 lib/ftext.php
 lib/getopt.php
 lib/gmpshim.php
+lib/hclcolor.php
 lib/ht.php
 lib/icons.php
 lib/json.php
 lib/jsonexception.php
 lib/jsonparser.php
 lib/jwtparser.php
+lib/labcolor.php
 lib/ldaplogin.php
 lib/login.php
 lib/mailer.php
@@ -164,6 +167,8 @@ lib/mimetext.php
 lib/mimetype.php
 lib/mincostmaxflow.php
 lib/navigation.php
+lib/oklabcolor.php
+lib/oklchcolor.php
 lib/phpqsession.php
 lib/polyfills.php
 lib/qrequest.php
@@ -187,12 +192,15 @@ src/api/api_completion.php
 src/api/api_decision.php
 src/api/api_error.php
 src/api/api_events.php
+src/api/api_follow.php
 src/api/api_formatcheck.php
 src/api/api_graphdata.php
 src/api/api_mail.php
+src/api/api_paper.php
 src/api/api_paperpc.php
 src/api/api_preference.php
 src/api/api_requestreview.php
+src/api/api_review.php
 src/api/api_reviewtoken.php
 src/api/api_search.php
 src/api/api_searchconfig.php
@@ -200,8 +208,11 @@ src/api/api_session.php
 src/api/api_settings.php
 src/api/api_taganno.php
 src/api/api_tags.php
+src/api/api_upload.php
 src/api/api_user.php
+src/apihelpers.php
 src/assigners/a_conflict.php
+src/assigners/a_copytag.php
 src/assigners/a_decision.php
 src/assigners/a_error.php
 src/assigners/a_follow.php
@@ -210,6 +221,7 @@ src/assigners/a_preference.php
 src/assigners/a_review.php
 src/assigners/a_status.php
 src/assigners/a_tag.php
+src/assigners/a_taganno.php
 src/assigners/a_unsubmitreview.php
 src/assignmentcountset.php
 src/assignmentset.php
@@ -238,6 +250,7 @@ src/contactcounter.php
 src/contactcountmatcher.php
 src/contactlist.php
 src/contactsearch.php
+src/contactset.php
 src/decisioninfo.php
 src/decisionset.php
 src/documentfiletree.php
@@ -245,6 +258,7 @@ src/documentinfo.php
 src/documentinfoset.php
 src/documenthashmatcher.php
 src/documentrequest.php
+src/fieldchangeset.php
 src/fieldrender.php
 src/filefilter.php
 src/formatspec.php
@@ -307,7 +321,6 @@ src/listactions/la_get_sub.php
 src/listactions/la_mail.php
 src/listactions/la_revpref.php
 src/listactions/la_tag.php
-src/listsorter.php
 src/logentry.php
 src/logentryfilter.php
 src/mailrecipients.php
@@ -316,7 +329,9 @@ src/meetingtracker.php
 src/mentionparser.php
 src/mergecontacts.php
 src/multiconference.php
+src/notificationinfo.php
 src/options/o_abstract.php
+src/options/o_attachments.php
 src/options/o_authors.php
 src/options/o_checkboxes.php
 src/options/o_checkboxesbase.php
@@ -326,7 +341,6 @@ src/options/o_nonblind.php
 src/options/o_numeric.php
 src/options/o_pcconflicts.php
 src/options/o_realnumber.php
-src/options/o_submissionversion.php
 src/options/o_title.php
 src/options/o_topics.php
 src/pages/p_adminhome.php
@@ -361,10 +375,10 @@ src/pages/p_search.php
 src/pages/p_settings.php
 src/pages/p_signin.php
 src/pages/p_users.php
-src/paperapi.php
 src/papercolumn.php
 src/papercolumns/pc_administrator.php
 src/papercolumns/pc_assignreview.php
+src/papercolumns/pc_color.php
 src/papercolumns/pc_commenters.php
 src/papercolumns/pc_conflict.php
 src/papercolumns/pc_conflictmatch.php
@@ -388,27 +402,33 @@ src/papercolumns/pc_topics.php
 src/papercolumns/pc_topicscore.php
 src/papercolumns/pc_wordcount.php
 src/paperevents.php
+src/paperexport.php
 src/paperinfo.php
 src/paperlist.php
 src/paperoption.php
+src/paperoptionlist.php
 src/paperrequest.php
 src/papersearch.php
 src/paperstatus.php
 src/papertable.php
 src/paperrank.php
+src/papervalue.php
 src/permissionproblem.php
 src/quicklinksrenderer.php
 src/responseround.php
 src/reviewdiffinfo.php
 src/reviewfield.php
 src/reviewfields/rf_checkbox.php
+src/reviewfields/rf_checkboxes.php
 src/reviewfields/rf_discrete.php
 src/reviewfields/rf_text.php
+src/reviewfieldsearch.php
 src/reviewform.php
 src/reviewhistoryinfo.php
 src/reviewinfo.php
 src/reviewrefusalinfo.php
 src/reviewrequestinfo.php
+src/reviewsearchmatcher.php
 src/reviewtimes.php
 src/schema.sql
 src/search/st_admin.php
@@ -434,6 +454,7 @@ src/search/st_paperstatus.php
 src/search/st_proposal.php
 src/search/st_perm.php
 src/search/st_pdf.php
+src/search/st_phase.php
 src/search/st_realnumberoption.php
 src/search/st_reconflict.php
 src/search/st_review.php
@@ -450,6 +471,7 @@ src/searchword.php
 src/sessionlist.php
 src/settinginfoset.php
 src/settingparser.php
+src/settings/s_automatictag.php
 src/settings/s_banal.php
 src/settings/s_basics.php
 src/settings/s_decision.php
@@ -457,6 +479,7 @@ src/settings/s_decisionvisibility.php
 src/settings/s_finalversions.php
 src/settings/s_json.php
 src/settings/s_messages.php
+src/settings/s_namedsearch.php
 src/settings/s_options.php
 src/settings/s_response.php
 src/settings/s_review.php
@@ -494,6 +517,7 @@ src/useractions.php
 src/userinfo/u_developer.php
 src/userinfo/u_security.php
 src/userstatus.php
+src/xtparams.php
 
 devel/hotcrp.vim
 
@@ -546,7 +570,7 @@ scripts/buzzer.js
 scripts/emojicodes.json
 scripts/graph.js
 scripts/jquery-1.12.4.min.js
-scripts/jquery-3.6.0.min.js
+scripts/jquery-3.6.4.min.js
 scripts/script.js
 scripts/settings.js
 

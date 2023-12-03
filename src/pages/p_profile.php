@@ -58,7 +58,7 @@ class Profile_Page {
             if ($cs->user_ids()) {
                 $list = (new SessionList("u/all/" . urlencode($this->qreq->search), $cs->user_ids(), "“{$u}”"))
                     ->set_urlbase($this->conf->hoturl_raw("users", ["t" => "all"], Conf::HOTURL_SITEREL));
-                $list->set_cookie($this->viewer);
+                $list->set_cookie($this->qreq);
                 $user = $this->conf->user_by_id($cs->user_ids()[0]);
                 $this->conf->redirect_hoturl("profile", ["u" => $user->email]);
             } else {
@@ -72,7 +72,7 @@ class Profile_Page {
         if (isset($this->qreq->profile_contactid)
             && $this->qreq->profile_contactid !== (string) $user->contactId) {
             if (isset($this->qreq->save) || isset($this->qreq->savebulk)) {
-                $this->conf->error_msg("<0>Changes not saved; your session has changed since you last reloaded this tab");
+                $this->conf->error_msg("<0>Changes not saved; your session has changed since you last loaded this tab");
             }
             $this->conf->redirect_self($this->qreq, ["u" => $u]);
         }
@@ -115,7 +115,7 @@ class Profile_Page {
             $user = $this->viewer;
         } else if ($this->viewer->privChair
                    && ($u === "new" || $u === "bulk")) {
-            $user = Contact::make($this->conf);
+            $user = Contact::make_placeholder($this->conf);
             $this->page_type = $u === "new" ? 1 : 2;
         } else {
             $user = $this->handle_user_search($u);
@@ -284,11 +284,11 @@ class Profile_Page {
 
         $ustatus = new UserStatus($this->viewer);
         $ustatus->no_deprivilege_self = true;
-        $ustatus->no_nonempty_profile = true;
+        $ustatus->update_profile_if_empty = !$this->qreq->bulkoverride;
         $ustatus->add_csv_synonyms($csv);
 
         while (($line = $csv->next_row())) {
-            $ustatus->set_user(Contact::make($this->conf));
+            $ustatus->set_user(Contact::make_placeholder($this->conf));
             $ustatus->clear_messages();
             $ustatus->jval = (object) ["id" => null];
             $ustatus->csvreq = $line;
@@ -319,19 +319,19 @@ class Profile_Page {
         }
 
         if (!empty($ustatus->unknown_topics)) {
-            $ms->warning_at(null, $this->conf->_("<0>Unknown topics ignored (%#s)", array_keys($ustatus->unknown_topics)));
+            $ms->warning_at(null, $this->conf->_("<0>Unknown topics ignored ({:list})", array_keys($ustatus->unknown_topics)));
         }
         $mpos = 0;
         if (!empty($success)) {
-            $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Saved accounts %#s", $success)));
+            $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Saved accounts {:list}", $success)));
         } else if ($ms->has_error()) {
             $ms->splice_item($mpos++, MessageItem::error($this->conf->_("<0>Changes not saved; please correct these errors and try again")));
         }
         if (!empty($notified)) {
-            $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Activated accounts with email notification %#s", $notified)));
+            $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Activated accounts and sent mail to {:list}", $notified)));
         }
         if (!empty($nochanges)) {
-            $ms->splice_item($mpos++, new MessageItem(null, $this->conf->_("<5>No changes to accounts %#s", $nochanges), MessageSet::MARKED_NOTE));
+            $ms->splice_item($mpos++, new MessageItem(null, $this->conf->_("<5>No changes to accounts {:list}", $nochanges), MessageSet::WARNING_NOTE));
         } else if (!$ms->has_message()) {
             $ms->splice_item($mpos++, new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
         }
@@ -348,8 +348,8 @@ class Profile_Page {
         $this->ustatus->jval = (object) ["id" => $this->user->has_account_here() ? $this->user->contactId : "new"];
         $this->ustatus->no_deprivilege_self = true;
         if ($this->page_type !== 0) {
-            $this->ustatus->no_nonempty_profile = true;
-            $this->ustatus->no_nonempty_pc = true;
+            $this->ustatus->update_profile_if_empty = true;
+            $this->ustatus->update_pc_if_empty = true;
             $this->ustatus->notify = true;
         }
 
@@ -380,7 +380,7 @@ class Profile_Page {
             }
             if (empty($this->ustatus->diffs)) {
                 if (!$this->ustatus->has_message_at("email_confirm")) {
-                    $this->ustatus->splice_msg($pos++, "<0>No changes", MessageSet::MARKED_NOTE);
+                    $this->ustatus->splice_msg($pos++, "<0>No changes", MessageSet::WARNING_NOTE);
                 }
             } else if ($this->ustatus->notified) {
                 $this->ustatus->splice_msg($pos++, "<0>Changes saved{$diffs} and user notified", MessageSet::SUCCESS);
@@ -443,7 +443,7 @@ class Profile_Page {
                 $this->conf->redirect_self($this->qreq);
             }
         } else {
-            $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::MARKED_NOTE));
+            $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
         }
     }
 
@@ -470,7 +470,8 @@ class Profile_Page {
                 $this->conf->qe_raw("delete from $table where contactId={$this->user->contactId}");
             }
             // delete twiddle tags
-            $assigner = new AssignmentSet($this->viewer, true);
+            $assigner = new AssignmentSet($this->viewer);
+            $assigner->set_override_conflicts(true);
             $assigner->parse("paper,tag\nall,{$this->user->contactId}~all#clear\n");
             $assigner->execute();
             // clear caches
@@ -591,7 +592,7 @@ class Profile_Page {
             $title = $this->viewer->name_html_for($this->user) . " profile";
         }
         $this->qreq->print_header($title, "account", [
-            "title_div" => '<hr class="c">',
+            "title_div" => "",
             "body_class" => "leftmenu",
             "action_bar" => QuicklinksRenderer::make($this->qreq, "account"),
             "save_messages" => true
@@ -611,14 +612,14 @@ class Profile_Page {
             $form_params["ls"] = $this->qreq->ls;
         }
         echo Ht::form($this->conf->hoturl("=profile", $form_params), [
-            "id" => "form-profile",
-            "class" => "need-unload-protection",
+            "id" => "f-profile",
+            "class" => "need-diff-check need-unload-protection",
             "data-user" => $this->page_type ? null : $this->user->email
         ]);
 
         // left menu
         echo '<div class="leftmenu-left"><nav class="leftmenu-menu">',
-            '<h1 class="leftmenu"><a href="" class="uic js-leftmenu q">Account</a></h1>',
+            '<h1 class="leftmenu"><button type="button" class="q uic js-leftmenu">Account</button></h1>',
             '<ul class="leftmenu-list">';
 
         if ($this->viewer->privChair) {
@@ -658,9 +659,10 @@ class Profile_Page {
 
         echo '</ul>';
 
-        if ($this->page_type === 0) {
-            echo '<div class="leftmenu-if-left if-alert mt-5">',
-                Ht::submit("save", "Save changes", ["class" => "btn-primary"]), '</div>';
+        if ($this->page_type === 0 || $this->page_type === 1) {
+            $t = $this->page_type === 0 ? "Save changes" : "Create account";
+            echo '<div class="leftmenu-if-left if-differs mt-5">',
+                Ht::submit("save", $t, ["class" => "btn-primary"]), '</div>';
         }
 
         echo '</nav></div>',
@@ -692,11 +694,11 @@ class Profile_Page {
                 echo 'New account';
             } else {
                 if ($this->user !== $this->viewer) {
-                    echo $this->viewer->reviewer_html_for($this->user), ' ';
+                    echo $this->viewer->name_for("rn", $this->user), ' ';
                 }
-                echo htmlspecialchars($this->ustatus->cs()->get($this->topic)->title);
+                echo htmlspecialchars($this->ustatus->cs()->get($this->topic)->title), ' ';
                 if ($this->user->is_disabled()) {
-                    echo ' <span class="n dim">(disabled)</span>';
+                    echo '<span class="n dim user-disabled-marker">(disabled)</span>';
                 }
             }
             echo '</h2>';
@@ -724,7 +726,7 @@ class Profile_Page {
         echo "</main></form>";
 
         if ($this->page_type === 0) {
-            Ht::stash_script('hotcrp.highlight_form_children("#form-profile")');
+            Ht::stash_script('$("#f-profile").awaken()');
         }
         $this->qreq->print_footer();
     }

@@ -1,6 +1,6 @@
 <?php
 // tagrankparser.php -- HotCRP offline rank parsing
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class TagRankParser {
     /** @var Contact */
@@ -61,14 +61,14 @@ class TagRankParser {
                     $tag = $t;
                     $curIndex = 0;
                 } else {
-                    $settings[] = [null, null, $landmark, "Bad tag: " . $tagger->error_html(), null];
+                    $settings[] = [null, null, $landmark, "Bad tag: " . Ftext::as(0, $tagger->error_ftext()), null];
                 }
             } else if ($pid === "tag") {
                 if (($t = $tagger->check($idxs, Tagger::NOVALUE))) {
                     $tag = $t;
                     $curIndex = 0;
                 } else {
-                    $settings[] = [null, null, $landmark, "Bad tag: " . $tagger->error_html(), null];
+                    $settings[] = [null, null, $landmark, "Bad tag: " . Ftext::as(0, $tagger->error_ftext()), null];
                 }
             } else {
                 if ($idxs === "X" || $idxs === "x" || $idxs === "clear") {
@@ -95,7 +95,7 @@ class TagRankParser {
                 } else if ($tag === "") {
                     $settings[] = [null, null, $landmark, "Tag missing.", null];
                 } else {
-                    $settings[] = [$pid, "$tag#$idx", $landmark, null, $row["title"]];
+                    $settings[] = [$pid, "{$tag}#{$idx}", $landmark, null, $row["title"]];
                     $pids[(int) $pid] = true;
                 }
             }
@@ -106,10 +106,10 @@ class TagRankParser {
         $landmarks = [];
         foreach ($settings as $a) {
             list($pid, $idx, $landmark, $error, $title) = $a;
-            if ($pid === null) {
+            if ($pid === null || !ctype_digit($pid)) {
                 $csva[] = ["", "error", "", $landmark, $error];
             } else {
-                if (($prow = $pset[$pid] ?? null)
+                if (($prow = $pset->get(intval($pid)))
                     && $title !== null
                     && $title !== ""
                     && $title !== $prow->title

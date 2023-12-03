@@ -1,6 +1,6 @@
 <?php
 // settings/s_response.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Response_Setting {
     /** @var int */
@@ -15,6 +15,8 @@ class Response_Setting {
     public $grace;
     /** @var ?int */
     public $wordlimit;
+    /** @var ?int */
+    public $hard_wordlimit;
     /** @var string */
     public $condition = "all";
     /** @var string */
@@ -26,7 +28,7 @@ class Response_Setting {
 
     /** @return string */
     function default_instructions(Conf $conf) {
-        return $conf->fmt()->default_itext("resp_instrux", new FmtArg("wordlimit", $this->old_wordlimit));
+        return $conf->fmt()->default_translation("resp_instrux", new FmtArg("wordlimit", $this->old_wordlimit));
     }
 
     /** @return Response_Setting */
@@ -37,7 +39,8 @@ class Response_Setting {
         $rs->open = $rrd->open;
         $rs->done = $rrd->done;
         $rs->grace = $rrd->grace;
-        $rs->wordlimit = $rs->old_wordlimit = $rrd->words;
+        $rs->wordlimit = $rs->old_wordlimit = $rrd->wordlimit;
+        $rs->hard_wordlimit = $rrd->hard_wordlimit;
         $rs->condition = $rrd->condition ?? "all";
         $rs->instructions = $rrd->instructions ?? $rs->default_instructions($conf);
         return $rs;
@@ -68,8 +71,12 @@ class Response_Setting {
         if ($this->grace > 0) {
             $j->grace = $this->grace;
         }
-        if ($this->wordlimit !== 500) {
-            $j->words = $this->wordlimit ?? 0;
+        $wl = $this->wordlimit ?? 0;
+        if (($this->hard_wordlimit ?? 0) > 0) {
+            $j->wl = $wl <= 0 ? $this->hard_wordlimit : $wl;
+            $j->hwl = $this->hard_wordlimit;
+        } else if ($wl !== 500) {
+            $j->wl = $wl;
         }
         if (($this->condition ?? "") !== ""
             && $this->condition !== "all") {
@@ -110,7 +117,7 @@ class Response_SettingParser extends SettingParser {
     function default_value(Si $si, SettingValues $sv) {
         if ($si->name0 === "response/" && $si->name2 === "/instructions") {
             $n = $sv->oldv("response/{$si->name1}/wordlimit");
-            return $sv->conf->fmt()->default_itext("resp_instrux", new FmtArg("wordlimit", $n));
+            return $sv->conf->fmt()->default_translation("resp_instrux", new FmtArg("wordlimit", $n));
         } else {
             return null;
         }
@@ -121,7 +128,7 @@ class Response_SettingParser extends SettingParser {
             if ($si->name2 === "") {
                 $sv->set_oldv($si, Response_Setting::make_new($sv->conf));
             } else if ($si->name2 === "/title") {
-                $n = $sv->oldv("response/{$si->name1}/name");
+                $n = $sv->vstr("response/{$si->name1}/name");
                 $sv->set_oldv($si, $n ? "‘{$n}’ response" : "Response");
             }
         }
@@ -142,7 +149,7 @@ class Response_SettingParser extends SettingParser {
             return null;
         }
         if ($this->round_counts === null) {
-            $this->round_counts = Dbl::fetch_iimap($conf->dblink, "select commentRound, count(*) from PaperComment where commentType>=" . CommentInfo::CT_AUTHOR . " and (commentType&" . CommentInfo::CT_RESPONSE . ")!=0 group by commentRound");
+            $this->round_counts = Dbl::fetch_iimap($conf->dblink, "select commentRound, count(*) from PaperComment where commentType>=" . CommentInfo::CTVIS_AUTHOR . " and (commentType&" . CommentInfo::CT_RESPONSE . ")!=0 group by commentRound");
         }
         return $this->round_counts[$ctrid] ?? null;
     }
@@ -154,8 +161,10 @@ class Response_SettingParser extends SettingParser {
         }
         $sv->print_entry_group("response/{$this->ctr}/name", "Response name", [
             "class" => "uii js-settings-response-name want-delete-marker",
-            "horizontal" => true, "control_after" => $t
-        ], is_int($this->ctr) && $this->ctr > 1 ? null : "Use no name or a short name like ‘Rebuttal’.");
+            "horizontal" => true,
+            "control_after" => $t,
+            "hint" => is_int($this->ctr) && $this->ctr > 1 ? null : "Use no name or a short name like ‘Rebuttal’."
+        ]);
     }
 
     function print_deadline(SettingValues $sv) {
@@ -169,7 +178,10 @@ class Response_SettingParser extends SettingParser {
     }
 
     function print_wordlimit(SettingValues $sv) {
-        $sv->print_entry_group("response/{$this->ctr}/wordlimit", "Word limit", ["horizontal" => true], is_int($this->ctr) && $this->ctr > 1 ? null : "This is a soft limit: authors may submit longer responses. 0 means no limit.");
+        $sv->print_entry_group("response/{$this->ctr}/wordlimit", "Word limit", [
+            "horizontal" => true,
+            "hint" => is_int($this->ctr) && $this->ctr > 1 ? null : "This is a soft limit: authors may submit longer responses. 0 means no limit."
+        ]);
     }
 
     function print_instructions(SettingValues $sv) {
@@ -290,16 +302,16 @@ class Response_SettingParser extends SettingParser {
     function store_value(Si $si, SettingValues $sv) {
         if (!empty($this->round_delete)) {
             $sv->conf->qe("update PaperComment set commentRound=0, commentType=(commentType&~?)|? where commentType>=? and (commentType&?)!=0 and commentRound?a",
-                CommentInfo::CT_RESPONSE | CommentInfo::CT_VISIBILITY,
-                CommentInfo::CT_FROZEN | CommentInfo::CT_ADMINONLY,
-                CommentInfo::CT_AUTHOR,
+                CommentInfo::CT_RESPONSE | CommentInfo::CTVIS_MASK,
+                CommentInfo::CT_FROZEN | CommentInfo::CTVIS_ADMINONLY,
+                CommentInfo::CTVIS_AUTHOR,
                 CommentInfo::CT_RESPONSE,
                 $this->round_delete);
             $sv->mark_diff("response_deleted");
         }
         if (!empty($this->round_transform)) {
             $sv->conf->qe("update PaperComment set commentRound=case commentRound " . join(" ", $this->round_transform) . " else commentRound end where commentType>=? and (commentType&?)!=0",
-                CommentInfo::CT_AUTHOR,
+                CommentInfo::CTVIS_AUTHOR,
                 CommentInfo::CT_RESPONSE);
         }
     }
@@ -307,10 +319,16 @@ class Response_SettingParser extends SettingParser {
     static function crosscheck(SettingValues $sv) {
         if ($sv->has_interest("response")) {
             foreach ($sv->conf->response_rounds() as $i => $rrd) {
+                $ctr = $i + 1;
+                if ($rrd->hard_wordlimit > 0
+                    && $rrd->wordlimit > $rrd->hard_wordlimit) {
+                    $sv->error_at("response/{$ctr}/wordlimit", "<0>Word limit cannot be larger than hard word limit");
+                    $sv->error_at("response/{$ctr}/hard_wordlimit", null);
+                }
                 if ($rrd->condition !== null) {
                     $s = new PaperSearch($sv->conf->root_user(), $rrd->condition);
                     foreach ($s->message_list() as $mi) {
-                        $sv->append_item_at("response/" . ($i + 1) . "/condition", $mi);
+                        $sv->append_item_at("response/{$ctr}/condition", $mi);
                     }
                 }
             }

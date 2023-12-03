@@ -1,6 +1,6 @@
 <?php
 // search/st_paperstatus.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class PaperStatus_SearchTerm extends SearchTerm {
     private $match;
@@ -43,7 +43,7 @@ class PaperStatus_SearchTerm extends SearchTerm {
         }
         return true;
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

@@ -1,6 +1,6 @@
 <?php
 // siteloader.php -- HotCRP autoloader
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class SiteLoader {
     static $map = [
@@ -9,10 +9,13 @@ class SiteLoader {
         "AssignmentParser" => "src/assignmentset.php",
         "AutoassignerCosts" => "src/autoassigner.php",
         "Collator" => "lib/collatorshim.php",
+        "CommandLineException" => "lib/getopt.php",
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
         "Discrete_ReviewField" => "src/reviewfield.php",
         "DiscreteValues_ReviewField" => "src/reviewfield.php",
+        "Document_PaperOption" => "src/paperoption.php",
+        "Downloader" => "lib/filer.php",
         "False_SearchTerm" => "src/searchterm.php",
         "Fexpr" => "src/formula.php",
         "FmtArg" => "lib/fmt.php",
@@ -26,11 +29,8 @@ class SiteLoader {
         "LoginHelper" => "lib/login.php",
         "MessageItem" => "lib/messageset.php",
         "PaperInfoSet" => "src/paperinfo.php",
-        "PaperOptionList" => "src/paperoption.php",
-        "PaperValue" => "src/paperoption.php",
         "QrequestFile" => "lib/qrequest.php",
         "ReviewFieldInfo" => "src/reviewfield.php",
-        "ReviewSearchMatcher" => "src/search/st_review.php",
         "ReviewValues" => "src/reviewform.php",
         "StreamS3Result" => "lib/s3result.php",
         "TagAnno" => "lib/tagger.php",
@@ -207,7 +207,7 @@ class SiteLoader {
             }
             if (empty($matches) && $includepath === null) {
                 global $Opt;
-                $includepath = $Opt["includePath"] ?? $Opt["includepath"] ?? [];
+                $includepath = $Opt["includePath"] ?? $Opt["includepath"] /* XXX */ ?? [];
             }
             if (empty($matches) && !empty($includepath)) {
                 if ($f2 !== null) {
@@ -262,7 +262,7 @@ class SiteLoader {
     }
 
     /** @param string $class_name */
-    static function autoloader($class_name) {
+    static function autoload($class_name) {
         $f = self::$map[$class_name] ?? strtolower($class_name) . ".php";
         foreach (self::expand_includes(self::$root, $f, ["autoload" => true]) as $fx) {
             require_once($fx);
@@ -271,4 +271,4 @@ class SiteLoader {
 }
 
 SiteLoader::set_root();
-spl_autoload_register("SiteLoader::autoloader");
+spl_autoload_register("SiteLoader::autoload");

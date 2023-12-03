@@ -1,6 +1,6 @@
 <?php
 // contactlist.php -- HotCRP helper class for producing lists of contacts
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class ContactList {
     const FIELD_SELECTOR = 1000;
@@ -21,6 +21,7 @@ class ContactList {
     const FIELD_SHEPHERDS = 14;
     const FIELD_TAGS = 15;
     const FIELD_COLLABORATORS = 16;
+    const FIELD_INCOMPLETE_REVIEWS = 17;
     const FIELD_FIRST = 40;
     const FIELD_LAST = 41;
     const FIELD_SCORE = 50;
@@ -152,6 +153,9 @@ class ContactList {
         case self::FIELD_REVIEWS:
         case "reviews":
             return ['revstat', 1, 1, self::FIELD_REVIEWS, "reviews"];
+        case self::FIELD_INCOMPLETE_REVIEWS:
+        case "ire":
+            return ['revstat', 1, 1, self::FIELD_INCOMPLETE_REVIEWS, "ire"];
         case self::FIELD_REVIEW_RATINGS:
         case "revratings":
             return ['revstat', 1, 1, self::FIELD_REVIEW_RATINGS, "revratings"];
@@ -206,6 +210,7 @@ class ContactList {
             $this->have_folds["topics"] = $this->qopt["topics"] = true;
             break;
         case self::FIELD_REVIEWS:
+        case self::FIELD_INCOMPLETE_REVIEWS:
             $this->qopt["reviews"] = true;
             break;
         case self::FIELD_LEADS:
@@ -286,6 +291,12 @@ class ContactList {
         $ac = $this->_rect_data[$a->contactId] ?? [0, 0];
         $bc = $this->_rect_data[$b->contactId] ?? [0, 0];
         return $bc[1] <=> $ac[1] ? : ($bc[0] <=> $ac[0] ? : $this->_sortBase($a, $b));
+    }
+
+    function _sortIncompleteReviews($a, $b) {
+        $ac = $this->_rect_data[$a->contactId] ?? [0, 0];
+        $bc = $this->_rect_data[$b->contactId] ?? [0, 0];
+        return $bc[0] <=> $ac[0] ? : $this->_sortBase($a, $b);
     }
 
     function _sortLeads($a, $b) {
@@ -369,6 +380,9 @@ class ContactList {
         case self::FIELD_REVIEWS:
             usort($rows, [$this, "_sortReviews"]);
             break;
+        case self::FIELD_INCOMPLETE_REVIEWS:
+            usort($rows, [$this, "_sortIncompleteReviews"]);
+            break;
         case self::FIELD_LEADS:
             usort($rows, [$this, "_sortLeads"]);
             break;
@@ -386,9 +400,9 @@ class ContactList {
             break;
         default:
             $f = $this->_rfields[$this->sortField - self::FIELD_SCORE];
-            $scoresort = $this->qreq->csession("ulscoresort") ?? "A";
-            if (!in_array($scoresort, ["A", "V", "D"], true)) {
-                $scoresort = "A";
+            $scoresort = $this->qreq->csession("ulscoresort") ?? "average";
+            if (!in_array($scoresort, ["average", "variance", "maxmin"], true)) {
+                $scoresort = "average";
             }
             foreach ($rows as $row) {
                 $scoreinfo = new ScoreInfo($this->_extract_scores($row->contactId, $f));
@@ -423,7 +437,17 @@ class ContactList {
         case self::FIELD_LOWTOPICS:
             return "Low-interest topics";
         case self::FIELD_REVIEWS:
-            return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
+            if ($this->limit === "extsub") {
+                return "Completed reviews";
+            } else {
+                return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
+            }
+        case self::FIELD_INCOMPLETE_REVIEWS:
+            if ($this->limit === "extrev-not-accepted") {
+                return "Outstanding review requests";
+            } else {
+                return "Incomplete reviews";
+            }
         case self::FIELD_LEADS:
             return "Leads";
         case self::FIELD_SHEPHERDS:
@@ -466,14 +490,19 @@ class ContactList {
         if ($review_limit
             && ($rrow->reviewStatus >= ReviewInfo::RS_ADOPTED || $prow->timeSubmitted > 0 || $review_limit === "all")) {
             if ($this->limit === "re"
-                || ($this->limit === "req" && $rrow->reviewType == REVIEW_EXTERNAL && $rrow->requestedBy == $this->user->contactId)
-                || ($this->limit === "ext" && $rrow->reviewType == REVIEW_EXTERNAL)
-                || ($this->limit === "extsub" && $rrow->reviewType == REVIEW_EXTERNAL && $rrow->reviewStatus >= ReviewInfo::RS_ADOPTED)) {
+                || ($this->limit === "req" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->requestedBy == $this->user->contactId)
+                || ($this->limit === "ext" && $rrow->reviewType === REVIEW_EXTERNAL)
+                || ($this->limit === "extsub" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus >= ReviewInfo::RS_ADOPTED)
+                || ($this->limit === "extrev-not-accepted" && $rrow->reviewType === REVIEW_EXTERNAL && $rrow->reviewStatus === ReviewInfo::RS_EMPTY)) {
                 $this->_limit_cids[$cid] = true;
             }
         }
         if (!isset($this->_rect_data[$cid])) {
             $this->_rect_data[$cid] = [0, 0];
+        }
+        if (($this->limit === "extsub" && $rrow->reviewStatus < ReviewInfo::RS_ADOPTED)
+            || ($this->limit === "extrev-not-accepted" && $rrow->reviewStatus !== ReviewInfo::RS_EMPTY)) {
+            return;
         }
         if ($rrow->reviewStatus >= ReviewInfo::RS_ADOPTED) {
             $this->_rect_data[$cid][0] += 1;
@@ -521,7 +550,7 @@ class ContactList {
 
     private function collect_paper_data() {
         $limit = $this->limit;
-        $review_limit = in_array($limit, ["re", "req", "ext", "extsub", "all"]) ? $limit : null;
+        $review_limit = in_array($limit, ["re", "req", "ext", "extsub", "extrev-not-accepted", "all"]) ? $limit : null;
 
         $args = [];
         if (isset($this->qopt["papers"])) {
@@ -562,8 +591,8 @@ class ContactList {
             $this->_limit_cids = [];
             foreach ($prows as $prow) {
                 if ($this->test_paper_authors($prow)) {
-                    foreach ($prow->contacts() as $cid => $cflt) {
-                        $this->_limit_cids[$cid] = true;
+                    foreach ($prow->contact_list() as $u) {
+                        $this->_limit_cids[$u->contactId] = true;
                     }
                 }
             }
@@ -576,10 +605,10 @@ class ContactList {
             $this->_au_unsub = [];
             foreach ($prows as $prow) {
                 if ($this->test_paper_authors($prow)) {
-                    foreach ($prow->contacts() as $cflt) {
-                        $this->_au_data[$cflt->contactId][] = $prow->paperId;
+                    foreach ($prow->contact_list() as $u) {
+                        $this->_au_data[$u->contactId][] = $prow->paperId;
                         if ($prow->timeSubmitted <= 0) {
-                            $this->_au_unsub[$cflt->contactId] = true;
+                            $this->_au_unsub[$u->contactId] = true;
                         }
                     }
                 }
@@ -612,7 +641,7 @@ class ContactList {
                     $pids[] = $prow->paperId;
                 }
             }
-            $result = $this->conf->qe("select paperId, reviewId, " . $this->conf->query_ratings() . " ratingSignature from PaperReview where paperId?a and reviewType>0 group by paperId, reviewId", $pids);
+            $result = $this->conf->qe("select paperId, reviewId, " . $this->conf->rating_signature_query() . " ratingSignature from PaperReview where paperId?a and reviewType>0 group by paperId, reviewId", $pids);
             while (($row = $result->fetch_row())) {
                 $ratings[$row[0]][$row[1]] = $row[2];
             }
@@ -679,7 +708,7 @@ class ContactList {
                 $t = "<a href=\"" . $this->conf->hoturl("profile", "u=" . urlencode($row->email)) . "\"" . ($row->is_disabled() ? ' class="qh"' : "") . ">$t</a>";
             }
             if (($viewable = $row->viewable_tags($this->user))
-                && $this->conf->tags()->has_decoration) {
+                && $this->conf->tags()->has(TagInfo::TFM_DECORATION)) {
                 $tagger = new Tagger($this->user);
                 $t .= $tagger->unparse_decoration_html($viewable, Tagger::DECOR_USER);
             }
@@ -688,7 +717,7 @@ class ContactList {
                 $roles = 0;
             }
             if ($roles !== 0 && ($rolet = Contact::role_html_for($roles))) {
-                $t .= " $rolet";
+                $t .= " {$rolet}";
             }
             if ($this->user->privChair && $row->email != $this->user->email) {
                 $t .= " <a href=\"" . $this->conf->hoturl("index", "actas=" . urlencode($row->email)) . "\">"
@@ -746,6 +775,12 @@ class ContactList {
                 } else {
                     return $a1 . "<b>{$ct[1]}</b>/{$ct[0]}</a>";
                 }
+            } else {
+                return "";
+            }
+        case self::FIELD_INCOMPLETE_REVIEWS:
+            if (($ct = $this->_rect_data[$row->contactId] ?? null)) {
+                return "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=ire:" . urlencode($row->email)) . "\">{$ct[0]}</a>";
             } else {
                 return "";
             }
@@ -826,7 +861,7 @@ class ContactList {
                 $x = [];
                 foreach (Tagger::split($tags) as $t) {
                     if ($t !== "pc#0")
-                        $x[] = '<a class="q nw" href="' . $this->conf->hoturl("users", "t=%23" . Tagger::base($t)) . '">' . $this->tagger->unparse_hashed($t) . '</a>';
+                        $x[] = '<a class="q nw" href="' . $this->conf->hoturl("users", "t=%23" . Tagger::tv_tag($t)) . '">' . $this->tagger->unparse_hashed($t) . '</a>';
                 }
                 return join(" ", $x);
             } else {
@@ -894,6 +929,8 @@ class ContactList {
         case "ext":
         case "extsub":
             return $this->addScores([self::FIELD_SELECTOR, self::FIELD_NAME, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT, self::FIELD_COLLABORATORS, self::FIELD_HIGHTOPICS, self::FIELD_LOWTOPICS, self::FIELD_REVIEWS, self::FIELD_REVIEW_RATINGS, self::FIELD_REVIEW_PAPERS]);
+        case "extrev-not-accepted":
+            return $this->addScores([self::FIELD_SELECTOR, self::FIELD_NAME, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT, self::FIELD_COLLABORATORS, self::FIELD_HIGHTOPICS, self::FIELD_LOWTOPICS, self::FIELD_INCOMPLETE_REVIEWS, self::FIELD_REVIEW_PAPERS]);
         case "req":
             return $this->addScores([self::FIELD_SELECTOR, self::FIELD_NAME, self::FIELD_EMAIL, self::FIELD_AFFILIATION, self::FIELD_LASTVISIT, self::FIELD_TAGS, self::FIELD_COLLABORATORS, self::FIELD_HIGHTOPICS, self::FIELD_LOWTOPICS, self::FIELD_REVIEWS, self::FIELD_REVIEW_RATINGS, self::FIELD_REVIEW_PAPERS]);
         case "au":
@@ -939,7 +976,7 @@ class ContactList {
                 . Ht::submit("fn", "Go", ["value" => "modify", "class" => "uic js-submit-list ml-2"])];
         }
 
-        return "  <tfoot class=\"pltable" . ($hascolors ? " pltable-colored" : "")
+        return "  <tfoot class=\"pltable-tfoot" . ($hascolors ? " pltable-colored" : "")
             . "\">" . PaperList::render_footer_row(1, $ncol - 1,
                 "<b>Select people</b> (or <a class=\"ui js-select-all\" href=\"\">select all {$this->count}</a>), then&nbsp; ",
                 $lllgroups)
@@ -966,7 +1003,7 @@ class ContactList {
         } else if ($this->_limit_cids !== null) {
             $mainwhere[] = "contactId" . sql_in_int_list(array_keys($this->_limit_cids));
         }
-        $mainwhere[] = "disabled<" . Contact::DISABLEMENT_PLACEHOLDER;
+        $mainwhere[] = "(cflags&" . Contact::CFLAG_PLACEHOLDER . ")=0";
 
         // make query
         $result = $this->conf->qe_raw("select * from ContactInfo" . (empty($mainwhere) ? "" : " where " . join(" and ", $mainwhere)));
@@ -1085,7 +1122,7 @@ class ContactList {
                 }
             }
             if ($row->is_disabled() && $this->user->isPC) {
-                $trclass .= " graytext";
+                $trclass .= " dim";
             }
             $this->count++;
             $ids[] = (int) $row->contactId;
@@ -1158,7 +1195,7 @@ class ContactList {
         }
         $x .= "\">\n";
 
-        $x .= "  <thead class=\"pltable\">\n  <tr class=\"pl_headrow\">\n";
+        $x .= "  <thead class=\"pltable-thead\">\n  <tr class=\"pl_headrow\">\n";
 
         if ($this->sortable && $url) {
             $sortUrl = $url . (strpos($url, "?") ? "&amp;" : "?") . "sort=";
@@ -1177,7 +1214,7 @@ class ContactList {
                 $x .= "    <th class=\"pl plh pl_{$fdef[0]}\">";
                 $ftext = $this->header($fieldId);
                 if ($fieldId === $sortField) {
-                    $klass = $this->reverseSort ? "pl_sorting_rev" : "pl_sorting_fwd";
+                    $klass = $this->reverseSort ? "sort-descending" : "sort-ascending";
                     $qx = $this->_next_sort_link($sortUrl);
                     $x .= "<a class=\"pl_sort {$klass}\" rel=\"nofollow\" href=\"{$qx}\">{$ftext}</a>";
                 } else if ($fdef[2]) {
@@ -1191,10 +1228,10 @@ class ContactList {
         } else {
             foreach ($fieldDef as $fieldId => $fdef) {
                 if ($fdef[1] == 1 && isset($anyData[$fieldId])) {
-                    $x .= "    <th class=\"pl plh pl_$fdef[0]\">"
+                    $x .= "    <th class=\"pl plh pl_{$fdef[0]}\">"
                         . $this->header($fieldId) . "</th>\n";
                 } else if ($fdef[1] == 1) {
-                    $x .= "    <th class=\"pl plh pl_$fdef[0]\"></th>\n";
+                    $x .= "    <th class=\"pl plh pl_{$fdef[0]}\"></th>\n";
                 }
             }
         }
@@ -1206,7 +1243,7 @@ class ContactList {
             $x .= $this->footer($ncol, $hascolors);
         }
 
-        $x .= "<tbody class=\"pltable" . ($hascolors ? " pltable-colored" : "");
+        $x .= "<tbody class=\"pltable-tbody" . ($hascolors ? " pltable-colored" : "");
         if ($this->user->privChair) {
             $listlink = $listname;
             if ($listlink === "pcadminx") {
@@ -1244,5 +1281,4 @@ class ContactList {
         // run query
         return $this->_rows();
     }
-
 }

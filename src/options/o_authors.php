@@ -1,25 +1,28 @@
 <?php
 // o_authors.php -- HotCRP helper class for authors intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Authors_PaperOption extends PaperOption {
+    /** @var int */
+    private $max_count;
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
+        $this->max_count = $args->max ?? 0;
     }
     function author_list(PaperValue $ov) {
-        return PaperInfo::parse_author_list($ov->data_by_index(0) ?? "");
+        return PaperInfo::parse_author_list($ov->data() ?? "");
     }
     function value_force(PaperValue $ov) {
         $ov->set_value_data([1], [$ov->prow->authorInformation]);
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         $contacts_ov = $ov->prow->option(PaperOption::CONTACTSID);
         $lemails = [];
         foreach ($contacts_ov->data_list() as $email) {
             $lemails[] = strtolower($email);
         }
         $au = [];
-        foreach (PaperInfo::parse_author_list($ov->data_by_index(0) ?? "") as $auth) {
+        foreach (PaperInfo::parse_author_list($ov->data() ?? "") as $auth) {
             $au[] = $j = (object) $auth->unparse_nea_json();
             if ($auth->email !== "" && in_array(strtolower($auth->email), $lemails)) {
                 $j->contact = true;
@@ -37,9 +40,8 @@ class Authors_PaperOption extends PaperOption {
             $ov->estop($this->conf->_("<0>Entry required"));
             $ov->msg_at("authors:1", null, MessageSet::ERROR);
         }
-        $max_authors = $this->conf->opt("maxAuthors");
-        if ($max_authors > 0 && $nreal > $max_authors) {
-            $ov->estop($this->conf->_("<0>A submission may have at most %d authors", $max_authors));
+        if ($this->max_count > 0 && $nreal > $this->max_count) {
+            $ov->estop($this->conf->_("<0>A {submission} may have at most {max} authors", new FmtArg("max", $this->max_count)));
         }
 
         $msg1 = $msg2 = false;
@@ -67,65 +69,49 @@ class Authors_PaperOption extends PaperOption {
         if ($msg2) {
             $ov->warning("<0>Please enter a name and optional email address for every author");
         }
-
-        if ($ov->value_count() === 2) {
-            foreach (explode("\n", $ov->data_by_index(1)) as $email) {
-                if (!validate_email($email)
-                    && $ov->prow->conflict_type_by_email($email) < CONFLICT_AUTHOR) {
-                    $ov->estop("<0>Invalid email address ‘{$email}’");
-                }
-            }
-        }
     }
-    /** @param list<Author> $authlist */
-    private function save_conflicts_author($authlist, PaperStatus $ps) {
+    function value_save(PaperValue $ov, PaperStatus $ps) {
+        // set property
+        $authlist = $this->author_list($ov);
+        $v = "";
         $emails = [];
         foreach ($authlist as $auth) {
+            if (!$auth->is_empty()) {
+                $v .= ($v === "" ? "" : "\n") . $auth->unparse_tabbed();
+            }
             $emails[] = $auth->email;
         }
-        $pemails = $this->conf->resolve_primary_emails($emails);
+        if ($v === $ov->prow->authorInformation) {
+            return true;
+        }
+        $ps->change_at($this);
+        $ov->prow->set_prop("authorInformation", $v);
+
+        // set conflicts
         $ps->clear_conflict_values(CONFLICT_AUTHOR);
+        $pemails = $this->conf->resolve_primary_emails($emails);
         foreach ($authlist as $i => $auth) {
             if ($auth->email === "") {
                 continue;
             }
-            if ($ps->update_conflict_value($auth->email, CONFLICT_AUTHOR, CONFLICT_AUTHOR)) {
-                $ps->register_user($auth);
+            if (strcasecmp($auth->email, $pemails[$i]) !== 0) {
+                $ps->update_conflict_value($auth, CONFLICT_AUTHOR, CONFLICT_AUTHOR);
+                $auth = clone $auth;
+                $auth->email = $pemails[$i];
             }
-            if (strcasecmp($auth->email, $pemails[$i]) !== 0
-                && $ps->update_conflict_value($pemails[$i], CONFLICT_AUTHOR, CONFLICT_AUTHOR)) {
-                $auth2 = clone $auth;
-                $auth2->email = $pemails[$i];
-                $ps->register_user($auth2);
-            }
+            $cflags = CONFLICT_AUTHOR
+                | ($ov->anno("contact:{$auth->email}") ? CONFLICT_CONTACTAUTHOR : 0);
+            $ps->update_conflict_value($auth, $cflags, $cflags);
         }
-    }
-    function value_save(PaperValue $ov, PaperStatus $ps) {
-        $authlist = $this->author_list($ov);
-        $v = "";
-        foreach ($authlist as $auth) {
-            if (!$auth->is_empty())
-                $v .= ($v === "" ? "" : "\n") . $auth->unparse_tabbed();
-        }
-        if ($v !== $ov->prow->authorInformation) {
-            $ps->change_at($this);
-            $ps->save_paperf("authorInformation", $v);
-            $this->save_conflicts_author($authlist, $ps);
-        }
-        if (($contacts = $ov->data_by_index(1)) !== null) {
-            $pemails = $this->conf->resolve_primary_emails(explode("\n", trim($contacts)));
-            foreach ($pemails as $email) {
-                $ps->update_conflict_value($email, CONFLICT_CONTACTAUTHOR, CONFLICT_CONTACTAUTHOR);
-            }
-        }
+        $ps->checkpoint_conflict_values();
         return true;
     }
     static private function translate_qreq(Qrequest $qreq) {
         $n = 1;
-        while (isset($qreq["auemail{$n}"])) {
-            $qreq["authors:email_{$n}"] = $qreq["auemail{$n}"];
-            $qreq["authors:name_{$n}"] = $qreq["auname{$n}"];
-            $qreq["authors:affiliation_{$n}"] = $qreq["auaff{$n}"];
+        while (isset($qreq["authors:email_{$n}"]) || isset($qreq["auemail{$n}"])) {
+            $qreq["authors:{$n}:email"] = $qreq["authors:email_{$n}"] ?? $qreq["auemail{$n}"];
+            $qreq["authors:{$n}:name"] = $qreq["authors:name_{$n}"] ?? $qreq["auname{$n}"];
+            $qreq["authors:{$n}:affiliation"] = $qreq["authors:affiliation_{$n}"] ?? $qreq["auaff{$n}"];
             ++$n;
         }
     }
@@ -142,15 +128,15 @@ class Authors_PaperOption extends PaperOption {
         }
     }
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
-        if (isset($qreq["auemail1"]) && !isset($qreq["authors:email_1"])) {
+        if (!isset($qreq["authors:1:email"])) {
             self::translate_qreq($qreq);
         }
         $v = [];
         $auth = new Author;
         for ($n = 1; true; ++$n) {
-            $email = $qreq["authors:email_$n"];
-            $name = $qreq["authors:name_$n"];
-            $aff = $qreq["authors:affiliation_$n"];
+            $email = $qreq["authors:{$n}:email"];
+            $name = $qreq["authors:{$n}:name"];
+            $aff = $qreq["authors:{$n}:affiliation"];
             if ($email === null && $name === null && $aff === null) {
                 break;
             }
@@ -183,7 +169,7 @@ class Authors_PaperOption extends PaperOption {
         if (!is_array($j) || is_associative_array($j)) {
             return PaperValue::make_estop($prow, $this, "<0>Validation error");
         }
-        $v = $contact_lemail = [];
+        $v = $cemail = [];
         foreach ($j as $i => $auj) {
             if (is_object($auj) || is_associative_array($auj)) {
                 $auth = Author::make_keyed($auj);
@@ -196,20 +182,18 @@ class Authors_PaperOption extends PaperOption {
             }
             self::expand_author($auth, $prow);
             $v[] = $auth->unparse_tabbed();
-            if ($contact
-                && $auth->email !== ""
-                && $prow->conflict_type_by_email($auth->email) < CONFLICT_AUTHOR) {
-                $contact_lemail[] = $auth->email;
+            if ($contact && $auth->email !== "") {
+                $cemail[] = $auth->email;
             }
         }
-        if (empty($contact_lemail)) {
-            return PaperValue::make($prow, $this, 1, join("\n", $v));
-        } else {
-            return PaperValue::make_multi($prow, $this, [1, 1], [join("\n", $v), join("\n", $contact_lemail)]);
+        $ov = PaperValue::make($prow, $this, 1, join("\n", $v));
+        foreach ($cemail as $email) {
+            $ov->set_anno("contact:{$email}", true);
         }
+        return $ov;
     }
 
-    private function editable_author_component_entry($pt, $n, $component, $au, $reqau, $ignore_diff, $readonly) {
+    private function editable_author_component_entry($pt, $n, $component, $au, $reqau, $ignore_diff) {
         if ($component === "name") {
             $js = ["size" => "35", "placeholder" => "Name", "autocomplete" => "off", "aria-label" => "Author name"];
             $auval = $au ? $au->name(NAME_PARSABLE) : "";
@@ -224,19 +208,16 @@ class Authors_PaperOption extends PaperOption {
             $val = $reqau ? $reqau->affiliation : "";
         }
 
-        $js["class"] = $pt->max_control_class(["authors:{$n}", "authors:{$component}_{$n}"], "need-autogrow js-autosubmit editable-author editable-author-{$component}" . ($ignore_diff ? " ignore-diff" : ""));
+        $js["class"] = $pt->max_control_class(["authors:{$n}", "authors:{$n}:{$component}"], "need-autogrow js-autosubmit editable-author editable-author-{$component}" . ($ignore_diff ? " ignore-diff" : ""));
         if ($component === "email" && $pt->user->can_lookup_user()) {
             $js["class"] .= " uii js-email-populate";
         }
         if ($val !== $auval) {
             $js["data-default-value"] = $auval;
         }
-        if ($readonly) {
-            $js["readonly"] = true;
-        }
-        return Ht::entry("authors:{$component}_{$n}", $val, $js);
+        return Ht::entry("authors:{$n}:{$component}", $val, $js);
     }
-    private function editable_authors_tr($pt, $n, $au, $reqau, $shownum, $readonly) {
+    private function echo_editable_authors_line($pt, $n, $au, $reqau, $shownum) {
         // on new paper, default to editing user as first author
         $ignore_diff = false;
         if ($n === 1
@@ -247,26 +228,20 @@ class Authors_PaperOption extends PaperOption {
             $ignore_diff = true;
         }
 
-        $t = '<tr class="author-entry">';
+        echo '<div class="author-entry draggable d-flex">';
         if ($shownum) {
-            $t .= '<td class="rxcaption">' . $n . '.</td>';
+            echo '<div class="flex-grow-0"><button type="button" class="draghandle ui js-dropmenu-open ui-drag row-order-draghandle need-tooltip need-dropmenu" draggable="true" title="Click or drag to reorder" data-tooltip-anchor="e">&zwnj;</button></div>',
+                '<div class="flex-grow-0 row-counter">', $n, '.</div>';
         }
-        $t .= '<td class="lentry">'
-            . $this->editable_author_component_entry($pt, $n, "email", $au, $reqau, $ignore_diff, $readonly) . ' '
-            . $this->editable_author_component_entry($pt, $n, "name", $au, $reqau, $ignore_diff, $readonly) . ' '
-            . $this->editable_author_component_entry($pt, $n, "affiliation", $au, $reqau, $ignore_diff,$readonly);
-        if (!$readonly) {
-            $t .= ' <span class="nb btnbox aumovebox"><button type="button" class="ui need-tooltip row-order-ui moveup" aria-label="Move up" tabindex="-1">'
-                . Icons::ui_triangle(0)
-                . '</button><button type="button" class="ui need-tooltip row-order-ui movedown" aria-label="Move down" tabindex="-1">'
-                . Icons::ui_triangle(2)
-                . '</button><button type="button" class="ui need-tooltip row-order-ui delete" aria-label="Delete" tabindex="-1">✖</button></span>';
-        }
-        return $t . $pt->messages_at("authors:$n")
-            . $pt->messages_at("authors:email_$n")
-            . $pt->messages_at("authors:name_$n")
-            . $pt->messages_at("authors:affiliation_$n")
-            . '</td></tr>';
+        echo '<div class="flex-grow-1">',
+            $this->editable_author_component_entry($pt, $n, "email", $au, $reqau, $ignore_diff), ' ',
+            $this->editable_author_component_entry($pt, $n, "name", $au, $reqau, $ignore_diff), ' ',
+            $this->editable_author_component_entry($pt, $n, "affiliation", $au, $reqau, $ignore_diff),
+            $pt->messages_at("authors:{$n}"),
+            $pt->messages_at("authors:{$n}:email"),
+            $pt->messages_at("authors:{$n}:name"),
+            $pt->messages_at("authors:{$n}:affiliation"),
+            '</div></div>';
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         $sb = $this->conf->submission_blindness();
@@ -276,15 +251,11 @@ class Authors_PaperOption extends PaperOption {
         } else if ($sb === Conf::BLIND_UNTILREVIEW) {
             $title .= ' <span class="n">(anonymous until review)</span>';
         }
-        $pt->print_editable_option_papt($this, $title, ["id" => "authors"]);
-        $readonly = !$this->test_editable($ov->prow);
+        $pt->print_editable_option_papt($this, $title, [
+            "id" => "authors", "for" => false
+        ]);
 
-        $max_authors = (int) $this->conf->opt("maxAuthors");
-        $min_authors = $max_authors > 0 ? min(5, $max_authors) : 5;
-        echo '<div class="papev"><table class="js-row-order">',
-            '<tbody id="authors:container" class="need-row-order-autogrow" data-min-rows="', $min_authors, '" ',
-            ($max_authors > 0 ? 'data-max-rows="' . $max_authors . '" ' : ''),
-            'data-row-template="', htmlspecialchars($this->editable_authors_tr($pt, '$', null, null, $max_authors !== 1, $readonly)), '">';
+        $min_authors = $this->max_count > 0 ? min(5, $this->max_count) : 5;
 
         $aulist = $this->author_list($ov);
         $reqaulist = $this->author_list($reqov);
@@ -294,19 +265,59 @@ class Authors_PaperOption extends PaperOption {
         }
         $nau = max($nreqau, count($aulist), $min_authors);
         if (($nau === $nreqau || $nau === count($aulist))
-            && ($max_authors <= 0 || $nau + 1 <= $max_authors)) {
+            && ($this->max_count <= 0 || $nau + 1 <= $this->max_count)) {
             ++$nau;
         }
+        $ndigits = (int) ceil(log10($nau + 1));
 
+        echo '<div class="papev">',
+            '<div id="authors:container" class="js-row-order need-row-order-autogrow" data-min-rows="', $min_authors, '"',
+            $this->max_count > 0 ? " data-max-rows=\"{$this->max_count}\"" : "",
+            ' data-row-counter-digits="', $ndigits,
+            '" data-row-template="authors:row-template">';
         for ($n = 1; $n <= $nau; ++$n) {
-            echo $this->editable_authors_tr($pt, $n, $aulist[$n-1] ?? null, $reqaulist[$n-1] ?? null, $max_authors !== 1, $readonly);
+            $this->echo_editable_authors_line($pt, $n, $aulist[$n-1] ?? null, $reqaulist[$n-1] ?? null, $this->max_count !== 1);
         }
-        echo "</tbody></table></div></div>\n\n";
+        echo '</div>';
+        echo '<template id="authors:row-template" class="hidden">';
+        $this->echo_editable_authors_line($pt, '$', null, null, $this->max_count !== 1);
+        echo "</template></div></div>\n\n";
+    }
+
+    function field_fmt_context() {
+        return [new FmtArg("max", $this->max_count)];
     }
 
     function render(FieldRender $fr, PaperValue $ov) {
-        if ($fr->table) {
+        if ($fr->want(FieldRender::CFPAGE)) {
             $fr->table->render_authors($fr, $this);
+        } else {
+            $names = ["<ul class=\"x namelist\">"];
+            foreach ($this->author_list($ov) as $au) {
+                $n = htmlspecialchars(trim("{$au->firstName} {$au->lastName}"));
+                if ($au->email !== "") {
+                    $ehtml = htmlspecialchars($au->email);
+                    $e = "&lt;<a href=\"mailto:{$ehtml}\" class=\"q\">{$ehtml}</a>&gt;";
+                } else {
+                    $e = "";
+                }
+                $t = ($n === "" ? $e : $n);
+                if ($au->affiliation !== "") {
+                    $t .= " <span class=\"auaff\">(" . htmlspecialchars($au->affiliation) . ")</span>";
+                }
+                if ($n !== "" && $e !== "") {
+                    $t .= " " . $e;
+                }
+                $names[] = "<li class=\"odname\">{$t}</li>";
+            }
+            $names[] = "</ul>";
+            $fr->set_html(join("", $names));
         }
+    }
+
+    function export_setting() {
+        $sfs = parent::export_setting();
+        $sfs->max = $this->max_count;
+        return $sfs;
     }
 }

@@ -41,7 +41,7 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
             return [$this->symbols[$o - 49]];
         }
         $r = [];
-        for ($s = 0, $b = 1; $b < $fval; ++$s, $b <<= 1) {
+        for ($s = 0, $b = 1; $b <= $fval; ++$s, $b <<= 1) {
             if (($fval & $b) !== 0)
                 $r[] = $this->symbols[$s];
         }
@@ -318,17 +318,15 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
         return new Checkboxes_ReviewFieldSearch($this, $op | $rsm->rfop, $allow0, $fvm);
     }
 
-    function renumber_values($fmap) {
-        ReviewForm_SettingParser::renumber_values($this, function ($v) use ($fmap) {
-            $nv = 0;
-            for ($b = $s = 1; $b <= $v; $b <<= 1, ++$s) {
-                if (($v & $b) !== 0) {
-                    $ns = $fmap[$s] ?? $s;
-                    $nv |= $ns === $s ? $b : 1 << ($ns - 1);
-                }
+    function renumber_value($fmap, $fval) {
+        $nv = 0;
+        for ($b = $s = 1; $b <= $fval; $b <<= 1, ++$s) {
+            if (($fval & $b) !== 0) {
+                $ns = $fmap[$s] ?? $s;
+                $nv |= $ns === $s ? $b : 1 << ($ns - 1);
             }
-            return $nv;
-        });
+        }
+        return $nv;
     }
 }
 

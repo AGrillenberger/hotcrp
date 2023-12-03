@@ -279,11 +279,12 @@
     },
     {   "name": "revrate", "alias": "reviewratings"   },
     {
-        "name": "votetags", "title": "Voting",
+        "name": "voting", "title": "Voting",
         "description": "<0>PC members can vote for papers using tags.",
         "print_function": "VoteTags_HelpTopic::print",
         "order": 8000
     },
+    {   "name": "votetags", "alias": "voting"   },
     {
         "name": "ranking", "title": "Ranking",
         "description": "<0>PC members can rank papers using tags.",
@@ -328,5 +329,32 @@
         "description": "<0>Advanced control of site configuration.",
         "print_function": "*JSONSettings_HelpTopic::print",
         "order": 12000
+    },
+    {
+        "name": "developer", "short_title": "Developer",
+        "title": "Developer tools",
+        "description": "<0>Using HotCRP’s API.",
+        "print_function": "*Developer_HelpTopic::print",
+        "order": false
+    },
+    {
+        "name": "developer/tokens", "title": "API tokens",
+        "print_function": "*Developer_HelpTopic::print_tokens",
+        "order": 100
+    },
+    {
+        "name": "developer/general", "title": "General API usage",
+        "print_function": "*Developer_HelpTopic::print_usage",
+        "order": 200
+    },
+    {
+        "name": "developer/settings", "title": "Site settings",
+        "print_function": "*Developer_HelpTopic::print_settings",
+        "order": 300
+    },
+    {
+        "name": "developer/submissions", "title": "Submissions",
+        "print_function": "*Developer_HelpTopic::print_submissions",
+        "order": 400
     }
 ]

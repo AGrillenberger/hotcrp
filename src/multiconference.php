@@ -1,6 +1,6 @@
 <?php
 // multiconference.php -- HotCRP multiconference installations
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Multiconference {
     /** @var array<string,?Conf> */
@@ -12,7 +12,7 @@ class Multiconference {
 
         $confid = $confid ?? $Opt["confid"] ?? null;
         if ($confid === null && PHP_SAPI !== "cli") {
-            $base = Navigation::base_absolute(true);
+            $base = Navigation::get()->base_absolute(true);
             if (($multis = $Opt["multiconferenceAnalyzer"] ?? null)) {
                 foreach (is_array($multis) ? $multis : [$multis] as $multi) {
                     list($match, $replace) = explode(" ", $multi);
@@ -46,11 +46,11 @@ class Multiconference {
         if (self::$conf_cache === null) {
             self::$conf_cache = [];
             if (Conf::$main && ($xconfid = Conf::$main->opt("confid"))) {
-                self::$conf_cache[SiteLoader::$root . "{}{$xconfid}"] = Conf::$main;
+                self::$conf_cache[SiteLoader::$root . "\0{$xconfid}"] = Conf::$main;
             }
         }
         $root = $root ?? SiteLoader::$root;
-        $key = "{$root}{}{$confid}";
+        $key = "{$root}\0{$confid}";
         if (!array_key_exists($key, self::$conf_cache)) {
             self::$conf_cache[$key] = self::load_conf($root, $confid);
         }
@@ -117,7 +117,15 @@ class Multiconference {
             exit(1);
         }
 
-        if (Navigation::page() === "api" || ($_GET["ajax"] ?? null)) {
+        $qreq = $qreq ?? Qrequest::$main_request ?? Qrequest::make_minimal();
+        if (!$qreq->conf) {
+            $qreq->set_conf(Conf::$main ?? new Conf($Opt, false));
+        }
+        if ($link === false) {
+            $qreq->set_user(null);
+        }
+
+        if ($qreq->page() === "api" || ($_GET["ajax"] ?? null)) {
             http_response_code($status);
             header("Content-Type: application/json; charset=utf-8");
             $j = ["ok" => false, "message_list" => $mis];
@@ -128,13 +136,6 @@ class Multiconference {
             exit;
         }
 
-        $qreq = $qreq ?? Qrequest::$main_request ?? Qrequest::make_minimal();
-        if (!$qreq->conf) {
-            $qreq->set_conf(Conf::$main ?? new Conf($Opt, false));
-        }
-        if ($link === false) {
-            $qreq->set_user(null);
-        }
         http_response_code($status);
         $qreq->print_header($title, "", ["action_bar" => "", "body_class" => "body-error"]);
         $mis[0] = $mis[0] ?? MessageItem::error("<0>Internal error");

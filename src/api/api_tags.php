@@ -1,6 +1,6 @@
 <?php
 // api/api_tags.php -- HotCRP tags API call
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class Tags_API {
     /** @param ?PaperInfo $prow
@@ -14,13 +14,7 @@ class Tags_API {
         }
         $tmr->message_list = [];
         if ($tmr->ok
-            && $prow
-            && $user->can_administer($prow)
-            && stripos($prow->all_tags_text(), " perm:") !== false) {
-            self::perm_tagmessages($user, $prow, $tmr, $interest);
-        }
-        if ($tmr->ok
-            && $user->conf->tags()->has_allotment) {
+            && $user->conf->tags()->has(TagInfo::TF_ALLOTMENT)) {
             self::allotment_tagmessages($user, $tmr, $interest);
         }
         return $tmr;
@@ -31,9 +25,10 @@ class Tags_API {
     static private function allotment_tagmessages($user, $tmr, $interest) {
         $pfx = "{$user->contactId}~";
         $allotments = [];
-        foreach ($user->conf->tags()->filter("allotment") as $ltag => $t) {
+        foreach ($user->conf->tags()->sorted_entries_having(TagInfo::TF_ALLOTMENT) as $ti) {
+            $ltag = $ti->ltag();
             if ($interest === null || isset($interest["{$pfx}{$ltag}"])) {
-                $allotments["{$pfx}{$ltag}"] = [$t, 0.0];
+                $allotments["{$pfx}{$ltag}"] = [$ti, 0.0];
             }
         }
         if (empty($allotments)) {
@@ -53,20 +48,6 @@ class Tags_API {
             } else if ($tv[1] > $t->allotment) {
                 $tmr->message_list[] = new MessageItem(null, "<5><a href=\"{$link}\">#~{$t->tag}</a>: Too many votes", 1);
                 $tmr->message_list[] = new MessageItem(null, "<0>Your vote total, {$tv[1]}, is over the allotment, {$t->allotment}.", MessageSet::INFORM);
-            }
-        }
-    }
-    /** @param TagMessageReport $tmr
-     * @param ?array<string,true> $interest */
-    static private function perm_tagmessages(Contact $user, PaperInfo $prow, $tmr, $interest) {
-        foreach (Tagger::split_unpack($prow->sorted_editable_tags($user)) as $ti) {
-            if (strncasecmp($ti[0], "perm:", 5) === 0
-                && ($interest === null || isset($interest[strtolower($ti[0])]))) {
-                if (!$prow->conf->is_known_perm_tag($ti[0])) {
-                    $tmr->message_list[] = new MessageItem(null, "<0>#{$ti[0]}: Unknown permission", 1);
-                } else if ($ti[1] != -1 && $ti[1] != 0) {
-                    $tmr->message_list[] = new MessageItem(null, "<0>#{$ti[0]}#{$ti[1]}: Permission tag should have value 0 (allow) or -1 (deny)", 1);
-                }
             }
         }
     }
@@ -112,7 +93,6 @@ class Tags_API {
         }
 
         // save tags using assigner
-        $pids = [];
         $x = ["paper,action,tag"];
         $interestall = !$prow || isset($qreq->tags);
         if ($prow) {
@@ -135,7 +115,6 @@ class Tags_API {
                     $pid = intval($w);
                 } else if ($w !== "" && $pid > 0) {
                     $x[] = "{$pid},tag," . CsvGenerator::quote($w);
-                    $pids[$pid] = true;
                 }
             }
         }
@@ -148,7 +127,7 @@ class Tags_API {
         $mlist = $assigner->message_list();
         $ok = $assigner->execute();
 
-        // exit
+        // execute
         if ($ok && $prow) {
             $prow->load_tags();
             if ($interestall) {
@@ -165,16 +144,15 @@ class Tags_API {
             $taginfo->message_list = self::combine_message_lists($mlist, $taginfo->message_list);
             $jr = new JsonResult($taginfo);
         } else if ($ok) {
-            $p = [];
-            if ($pids) {
-                foreach ($user->paper_set(["paperId" => array_keys($pids)]) as $pr) {
-                    $p[$pr->paperId] = new TagMessageReport;
-                    $pr->add_tag_info_json($p[$pr->paperId], $user);
-                }
-            }
-            $jr = new JsonResult(["ok" => true, "p" => $p]);
+            $jr = new JsonResult([
+                "ok" => true,
+                "p" => Assign_API::assigned_paper_info($user, $assigner)
+            ]);
         } else {
             $jr = new JsonResult(["ok" => false, "message_list" => $mlist]);
+        }
+        if ($qreq->search) {
+            Search_API::apply_search($jr, $user, $qreq, $qreq->search);
         }
         return $jr;
     }
@@ -182,7 +160,7 @@ class Tags_API {
     static function votereport_api(Contact $user, Qrequest $qreq, PaperInfo $prow) {
         $tagger = new Tagger($user);
         if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE))) {
-            return MessageItem::make_error_json($tagger->error_html());
+            return JsonResult::make_error(400, $tagger->error_ftext());
         }
         if (!$user->can_view_peruser_tag($prow, $tag)) {
             return ["ok" => false, "error" => "Permission error"];

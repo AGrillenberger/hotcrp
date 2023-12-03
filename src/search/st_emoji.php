@@ -1,6 +1,6 @@
 <?php
 // search/st_emoji.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Emoji_SearchTerm extends SearchTerm {
     /** @var Contact */
@@ -28,8 +28,8 @@ class Emoji_SearchTerm extends SearchTerm {
     function debug_json() {
         return ["type" => $this->type, "match" => $this->codes];
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
@@ -49,14 +49,13 @@ class Emoji_SearchTerm extends SearchTerm {
         $ecmap = $srch->conf->emoji_code_map();
         if (isset($ecmap[$word])) {
             $wantcode = $ecmap[$word];
-        } else if (preg_match('/\p{Emoji_Presentation}/u', $word)) {
-            $wantcode = $word;
         } else {
-            $wantcode = null;
+            // remove skin-tone modifiers and variation selectors from search word
+            $wantcode = preg_replace('/\xF0\x9F\x8F[\xBB\xBC\xBD\xBE\xBF]|\xEF\xB8[\x8E\x8F]/', '', $word);
         }
         $codes = [];
         foreach ($ecmap as $key => $code) {
-            if (($wantcode !== null && strpos($code, $wantcode) !== false)
+            if (strpos($code, $wantcode) !== false
                 || ($exact ? $key === $word : strpos($key, $word) !== false)
                 || ($star && preg_match($regex, $key)))
                 $codes[] = $code;

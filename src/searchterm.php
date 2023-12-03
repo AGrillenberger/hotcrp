@@ -1,6 +1,6 @@
 <?php
 // searchterm.php -- HotCRP paper search terms
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 abstract class SearchTerm {
     /** @var string
@@ -34,9 +34,10 @@ abstract class SearchTerm {
         } else if ($name === "xor") {
             $qr = new Xor_SearchTerm;
         } else {
+            assert($name === "then" || $name === "highlight");
             $qr = new Then_SearchTerm($op);
         }
-        foreach (is_array($terms) ? $terms : [$terms] as $qt) {
+        foreach ($terms as $qt) {
             $qr->append($qt);
         }
         return $qr->_finish();
@@ -137,7 +138,9 @@ abstract class SearchTerm {
 
 
     /** @return string */
-    abstract function sqlexpr(SearchQueryInfo $sqi);
+    function sqlexpr(SearchQueryInfo $sqi) {
+        return "true";
+    }
 
     /** @param ?bool $b
      * @return null|False_SearchTerm|True_SearchTerm */
@@ -202,15 +205,9 @@ abstract class SearchTerm {
     }
 
 
-    /** @return null|bool|array{type:string} */
-    function script_expression(PaperInfo $row) {
-        return $this->test($row, null);
-    }
-
-
-    /** @param bool $top
+    /** @param PaperSearchPrepareParam $param
      * @return void */
-    function configure_search($top, PaperSearch $srch) {
+    function prepare_visit($param, PaperSearch $srch) {
     }
 
     /** @param bool $top
@@ -220,13 +217,25 @@ abstract class SearchTerm {
         return null;
     }
 
-    const ABOUT_NO = 0;
-    const ABOUT_MAYBE = 1;
-    const ABOUT_SELF = 2;
-    const ABOUT_MANY = 3;
+    const ABOUT_PAPER = 0;
+    const ABOUT_UNKNOWN = 1;
+    const ABOUT_REVIEW = 2;
+    const ABOUT_REVIEW_SET = 3;
     /** @return 0|1|2|3 */
-    function about_reviews() {
-        return self::ABOUT_MAYBE;
+    function about() {
+        return self::ABOUT_PAPER;
+    }
+
+
+    /** @param 0|2 $about
+     * @return null|bool|array{type:string} */
+    function script_expression(PaperInfo $row, $about) {
+        return $this->test($row, null);
+    }
+
+    /** @return ?list<array{action:string}> */
+    function drag_assigners(Contact $user) {
+        return null;
     }
 }
 
@@ -243,8 +252,14 @@ class False_SearchTerm extends SearchTerm {
     function test(PaperInfo $row, $xinfo) {
         return false;
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
+    }
+    function script_expression(PaperInfo $row, $about) {
+        return false;
+    }
+    function drag_assigners(Contact $user) {
+        return null;
     }
 }
 
@@ -258,17 +273,20 @@ class True_SearchTerm extends SearchTerm {
     function simple_search(&$options) {
         return true;
     }
-    function sqlexpr(SearchQueryInfo $sqi) {
-        return "true";
-    }
     function is_sqlexpr_precise() {
         return true;
     }
     function test(PaperInfo $row, $xinfo) {
         return true;
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
+    }
+    function script_expression(PaperInfo $row, $about) {
+        return true;
+    }
+    function drag_assigners(Contact $user) {
+        return [];
     }
 }
 
@@ -318,6 +336,7 @@ abstract class Op_SearchTerm extends SearchTerm {
         }
         return $this;
     }
+    /** @return SearchTerm */
     abstract protected function _finish();
     /** @return list<SearchTerm> */
     protected function _flatten_children() {
@@ -347,6 +366,12 @@ abstract class Op_SearchTerm extends SearchTerm {
         } else {
             $this->child = $newchild;
             return $this;
+        }
+    }
+    function prepare_visit($param, PaperSearch $srch) {
+        $param = $param->nest($this);
+        foreach ($this->child as $qv) {
+            $qv->prepare_visit($param, $srch);
         }
     }
 
@@ -387,16 +412,10 @@ abstract class Op_SearchTerm extends SearchTerm {
             }
         }
     }
-    function configure_search($top, PaperSearch $srch) {
-        $top = $top && $this instanceof And_SearchTerm;
-        foreach ($this->child as $qv) {
-            $qv->configure_search($top, $srch);
-        }
-    }
-    function about_reviews() {
+    function about() {
         $x = 0;
         foreach ($this->child as $qv) {
-            $x = max($x, $qv->about_reviews());
+            $x = max($x, $qv->about());
         }
         return $x;
     }
@@ -445,8 +464,8 @@ class Not_SearchTerm extends Op_SearchTerm {
         return !$this->child[0]->test($row, $xinfo);
     }
 
-    function script_expression(PaperInfo $row) {
-        $x = $this->child[0]->script_expression($row);
+    function script_expression(PaperInfo $row, $about) {
+        $x = $this->child[0]->script_expression($row, $about);
         if ($x === null) {
             return null;
         } else if ($x === false || $x === true) {
@@ -454,8 +473,6 @@ class Not_SearchTerm extends Op_SearchTerm {
         } else {
             return ["type" => "not", "child" => [$x]];
         }
-    }
-    function configure_search($top, PaperSearch $srch) {
     }
 }
 
@@ -502,11 +519,22 @@ class And_SearchTerm extends Op_SearchTerm {
         }
         return true;
     }
-    function script_expression(PaperInfo $row) {
+    function default_sort_column($top, $pl) {
+        $s = null;
+        foreach ($this->child as $qv) {
+            $s1 = $qv->default_sort_column($top, $pl);
+            if ($s && $s1) {
+                return null;
+            }
+            $s = $s ?? $s1;
+        }
+        return $s;
+    }
+    function script_expression(PaperInfo $row, $about) {
         $ch = [];
         $ok = true;
         foreach ($this->child as $subt) {
-            $x = $subt->script_expression($row);
+            $x = $subt->script_expression($row, $about);
             if ($x === null) {
                 return null;
             } else if ($x === false) {
@@ -523,16 +551,16 @@ class And_SearchTerm extends Op_SearchTerm {
             return ["type" => "and", "child" => $ch];
         }
     }
-    function default_sort_column($top, $pl) {
-        $s = null;
-        foreach ($this->child as $qv) {
-            $s1 = $qv->default_sort_column($top, $pl);
-            if ($s && $s1) {
+    function drag_assigners(Contact $user) {
+        $ch = [];
+        foreach ($this->child as $subt) {
+            $x = $subt->drag_assigners($user);
+            if ($x === null) {
                 return null;
             }
-            $s = $s ?? $s1;
+            $ch = array_merge($ch, $x);
         }
-        return $s;
+        return $ch;
     }
 }
 
@@ -592,11 +620,14 @@ class Or_SearchTerm extends Op_SearchTerm {
         }
         return false;
     }
-    static function make_script_expression($child, PaperInfo $row) {
+    /** @param list<SearchTerm> $child
+     * @param 0|2 $about
+     * @return null|bool|array{type:string} */
+    static function make_script_expression($child, PaperInfo $row, $about) {
         $ch = [];
         $ok = false;
         foreach ($child as $subt) {
-            $x = $subt->script_expression($row);
+            $x = $subt->script_expression($row, $about);
             if ($x === null) {
                 return null;
             } else if ($x === true) {
@@ -613,8 +644,8 @@ class Or_SearchTerm extends Op_SearchTerm {
             return ["type" => "or", "child" => $ch];
         }
     }
-    function script_expression(PaperInfo $row) {
-        return self::make_script_expression($this->child, $row);
+    function script_expression(PaperInfo $row, $about) {
+        return self::make_script_expression($this->child, $row, $about);
     }
 }
 
@@ -678,9 +709,13 @@ class Then_SearchTerm extends Op_SearchTerm {
     /** @var ?string */
     private $opinfo;
     /** @var int */
-    public $nthen = 0;
+    private $nthen = 0;
     /** @var list<Highlight_SearchInfo> */
     private $hlinfo = [];
+    /** @var list<?Then_SearchTerm> */
+    private $_nested_thens = [];
+    /** @var list<int> */
+    private $_group_offsets = [];
     /** @var ?int */
     private $_last_group;
 
@@ -695,7 +730,7 @@ class Then_SearchTerm extends Op_SearchTerm {
         $newvalues = $newhvalues = $newhinfo = [];
 
         foreach ($this->child as $qvidx => $qv) {
-            if ($qv && $qvidx && $this->is_highlight) {
+            if ($qv && $qvidx > 0 && $this->is_highlight) {
                 if ($qv instanceof Then_SearchTerm) {
                     for ($i = 0; $i < $qv->nthen; ++$i) {
                         $newhvalues[] = $qv->child[$i];
@@ -727,6 +762,57 @@ class Then_SearchTerm extends Op_SearchTerm {
         $this->hlinfo = $newhinfo;
         return $this;
     }
+    function prepare_visit($param, PaperSearch $srch) {
+        $group_offset = 0;
+        foreach ($this->child as $i => $qv) {
+            $param1 = $param->nest($this);
+            $qv->prepare_visit($param1, $srch);
+            if ($i < $this->nthen) {
+                $this->_group_offsets[] = $group_offset;
+                if ($param->allow_then() && $param1->then_term()) {
+                    $this->_nested_thens[] = $param1->then_term();
+                    $group_offset += count($param1->then_term()->group_terms());
+                } else {
+                    $this->_nested_thens[] = null;
+                    $group_offset += 1;
+                }
+            }
+        }
+        $this->_group_offsets[] = $group_offset;
+        $param->set_then_term($this);
+    }
+    function visit($visitor) {
+        // Only visit non-highlight terms
+        $x = [];
+        for ($i = 0; $i !== $this->nthen; ++$i) {
+            $x[] = $this->child[$i]->visit($visitor);
+        }
+        return $visitor($this, ...$x);
+    }
+
+    /** @return list<SearchTerm> */
+    function group_terms() {
+        $gt = [];
+        foreach ($this->_nested_thens as $i => $thench) {
+            if ($thench) {
+                array_push($gt, ...$thench->group_terms());
+            } else {
+                $gt[] = $this->child[$i];
+            }
+        }
+        return $gt;
+    }
+
+    /** @param $offset int
+     * @return \Generator<array{SearchTerm,list<int>}> */
+    function subset_terms($offset = 0) {
+        foreach ($this->_nested_thens as $i => $thench) {
+            if ($thench) {
+                yield from $thench->subset_terms($offset + $this->_group_offsets[$i]);
+            }
+            yield [$this->child[$i], range($offset + $this->_group_offsets[$i], $offset + $this->_group_offsets[$i + 1] - 1)];
+        }
+    }
 
     function sqlexpr(SearchQueryInfo $sqi) {
         ++$sqi->depth;
@@ -746,27 +832,41 @@ class Then_SearchTerm extends Op_SearchTerm {
         }
         return false;
     }
-    function script_expression(PaperInfo $row) {
-        return Or_SearchTerm::make_script_expression(array_slice($this->child, 0, $this->nthen), $row);
+    function script_expression(PaperInfo $row, $about) {
+        return Or_SearchTerm::make_script_expression(array_slice($this->child, 0, $this->nthen), $row, $about);
     }
 
     /** @return bool */
     function has_highlight() {
-        return $this->nthen < count($this->child);
+        if ($this->nthen < count($this->child)) {
+            return true;
+        }
+        foreach ($this->_nested_thens as $thench) {
+            if ($thench && $thench->has_highlight()) {
+                return true;
+            }
+        }
+        return false;
     }
     /** @return int */
     function _last_group() {
-        return $this->_last_group;
+        $g = $this->_last_group;
+        $thench = $this->_nested_thens[$g];
+        return $this->_group_offsets[$g] + ($thench ? $thench->_last_group() : 0);
     }
     /** @return list<string> */
     function _last_highlights(PaperInfo $row) {
+        $g = $this->_last_group;
         $hls = [];
         foreach ($this->hlinfo as $i => $hl) {
-            if ($this->_last_group >= $hl->pos
-                && $this->_last_group < $hl->pos + $hl->count
+            if ($g >= $hl->pos
+                && $g < $hl->pos + $hl->count
                 && $this->child[$this->nthen + $i]->test($row, null)) {
                 $hls[] = $hl->color;
             }
+        }
+        if (($thench = $this->_nested_thens[$g])) {
+            array_push($hls, ...$thench->_last_highlights($row));
         }
         return $hls;
     }
@@ -810,12 +910,13 @@ class Limit_SearchTerm extends SearchTerm {
     /** @var Contact */
     private $reviewer;
 
+    /* NB all named_limits must equal themselves when urlencoded */
     static public $reqtype_map = [
         "a" => ["a", "author"],
-        "acc" => ["acc", "accepted"],
-        "accepted" => ["acc", "accepted"],
-        "act" => ["act", "active"],
-        "active" => ["act", "active"],
+        "acc" => "accepted",
+        "accepted" => "accepted",
+        "act" => "active",
+        "active" => "active",
         "actadmin" => ["actadmin", "activeadmin"],
         "activeadmin" => ["actadmin", "activeadmin"],
         "admin" => "admin",
@@ -843,8 +944,9 @@ class Limit_SearchTerm extends SearchTerm {
         "undecided" => "undecided",
         "unsub" => ["unsub", "unsubmitted"],
         "unsubmitted" => ["unsub", "unsubmitted"],
+        "viewable" => "viewable",
         "vis" => "viewable",
-        "visible" => "viewable",
+        "visible" => "viewable"
     ];
 
     const LFLAG_ACTIVE = 1;
@@ -882,9 +984,9 @@ class Limit_SearchTerm extends SearchTerm {
         if (in_array($limit, ["a", "ar", "r", "req", "viewable", "reviewable",
                               "all", "none"], true)) {
             $this->lflag = 0;
-        } else if (in_array($limit, ["act", "unsub", "actadmin"], true)
-                   || ($conf->can_pc_view_incomplete()
-                       && !in_array($limit, ["s", "acc"], true))) {
+        } else if (in_array($limit, ["active", "unsub", "actadmin"], true)
+                   || ($conf->can_pc_view_some_incomplete()
+                       && !in_array($limit, ["s", "accepted"], true))) {
             $this->lflag = self::LFLAG_ACTIVE;
         } else {
             $this->lflag = self::LFLAG_SUBMITTED;
@@ -898,7 +1000,7 @@ class Limit_SearchTerm extends SearchTerm {
 
     /** @return bool */
     function is_accepted() {
-        return $this->limit === "acc";
+        return $this->limit === "accepted";
     }
 
     /** @return bool */
@@ -906,6 +1008,8 @@ class Limit_SearchTerm extends SearchTerm {
         return $this->limit === "a";
     }
 
+    /** @param array<string,mixed> &$options
+     * @return bool */
     function simple_search(&$options) {
         // hidden papers => complex search
         if (($this->user->dangerous_track_mask() & Track::BITS_VIEW) !== 0) {
@@ -930,10 +1034,11 @@ class Limit_SearchTerm extends SearchTerm {
         case "s":
             assert($fin);
             return $this->user->isPC;
-        case "act":
-            assert(!!($options["active"] ?? false));
-            return $this->user->privChair
-                || ($this->user->isPC && $conf->can_pc_view_incomplete());
+        case "active":
+            assert($act || $fin);
+            $options["dec:active"] = true;
+            return $this->user->can_view_all_incomplete()
+                && $this->user->can_view_all_decision();
         case "reviewable":
             if (!$this->reviewer->isPC) {
                 $options["myReviews"] = true;
@@ -954,12 +1059,7 @@ class Limit_SearchTerm extends SearchTerm {
             assert($act || $fin);
             $options["myOutstandingReviews"] = true;
             return true;
-        case "act":
-            assert($act || $fin);
-            $options["dec:active"] = true;
-            return $this->user->can_view_all_decision()
-                && ($this->user->privChair || $conf->can_pc_view_incomplete());
-        case "acc":
+        case "accepted":
             assert($fin);
             $options["dec:yes"] = true;
             return $this->user->can_view_all_decision();
@@ -998,8 +1098,8 @@ class Limit_SearchTerm extends SearchTerm {
         case "actadmin":
             // broad limits are precise only if allowed to administer all
             return $this->user->allow_administer_all();
-        case "act":
-        case "acc":
+        case "active":
+        case "accepted":
         case "undecided":
             // decision limits are precise only if user can see all decisions
             return $this->user->can_view_all_decision();
@@ -1071,15 +1171,15 @@ class Limit_SearchTerm extends SearchTerm {
             } else if ($sqi->depth === 0) {
                 $ff[] = "MyReviews.reviewNeedsSubmit!=0";
             } else {
-                $ff[] = "exists (select * from PaperReview force index (primary) where paperId=Paper.paperId and $act_reviewer_sql and reviewNeedsSubmit!=0)";
+                $ff[] = "exists (select * from PaperReview force index (primary) where paperId=Paper.paperId and {$act_reviewer_sql} and reviewNeedsSubmit!=0)";
             }
             break;
-        case "act":
+        case "active":
             if ($this->user->can_view_all_decision()) {
                 $ff[] = "Paper." . $this->user->conf->decision_set()->sqlexpr("active");
             }
             break;
-        case "acc":
+        case "accepted":
             $ff[] = "Paper.outcome>0";
             break;
         case "undecided":
@@ -1150,14 +1250,15 @@ class Limit_SearchTerm extends SearchTerm {
                 return true;
             } else {
                 return ($row->timeSubmitted > 0
-                        || ($row->timeWithdrawn <= 0 && $user->conf->can_pc_view_incomplete()))
-                    && ($row->outcome_sign >= 0
+                        || ($row->timeWithdrawn <= 0
+                            && $row->submission_round()->incomplete_viewable))
+                    && ($row->outcome_sign !== -2
                         || !$user->can_view_decision($row));
             }
-        case "act":
-            return $row->outcome_sign >= 0
+        case "active":
+            return $row->outcome_sign !== -2
                 || !$user->can_view_decision($row);
-        case "acc":
+        case "accepted":
             return $row->outcome > 0
                 && $user->can_view_decision($row);
         case "undecided":
@@ -1184,16 +1285,16 @@ class Limit_SearchTerm extends SearchTerm {
         }
     }
 
-    function configure_search($top, PaperSearch $srch) {
-        if ($top && ($this->lflag & self::LFLAG_IMPLICIT) === 0) {
+    function prepare_visit($param, PaperSearch $srch) {
+        if ($param->toplevel() && ($this->lflag & self::LFLAG_IMPLICIT) === 0) {
             $srch->apply_limit($this);
         }
     }
-    function about_reviews() {
+    function about() {
         if (in_array($this->limit, ["viewable", "reviewable", "ar", "r", "rout", "req"])) {
-            return self::ABOUT_MANY;
+            return self::ABOUT_REVIEW_SET;
         } else {
-            return self::ABOUT_NO;
+            return self::ABOUT_PAPER;
         }
     }
 }
@@ -1201,7 +1302,7 @@ class Limit_SearchTerm extends SearchTerm {
 class TextMatch_SearchTerm extends SearchTerm {
     /** @var Contact */
     private $user;
-    /** @var string */
+    /** @var 'title'|'abstract'|'authorInformation'|'collaborators' */
     private $field;
     /** @var bool */
     private $authorish;
@@ -1238,8 +1339,9 @@ class TextMatch_SearchTerm extends SearchTerm {
 
     function sqlexpr(SearchQueryInfo $sqi) {
         $sqi->add_column($this->field, "Paper.{$this->field}");
+        $sqi->add_column("dataOverflow", "Paper.dataOverflow");
         if ($this->trivial && !$this->authorish) {
-            return "Paper.{$this->field}!=''";
+            return "(Paper.{$this->field}!='' or Paper.dataOverflow is not null)";
         } else {
             return "true";
         }
@@ -1248,7 +1350,7 @@ class TextMatch_SearchTerm extends SearchTerm {
         return $this->trivial && !$this->authorish;
     }
     function test(PaperInfo $row, $xinfo) {
-        $data = $row->{$this->field};
+        $data = $row->{$this->field}();
         if ($this->authorish && !$this->user->allow_view_authors($row)) {
             $data = "";
         }
@@ -1260,20 +1362,22 @@ class TextMatch_SearchTerm extends SearchTerm {
             return $row->field_match_pregexes($this->regex, $this->field);
         }
     }
-    function script_expression(PaperInfo $row) {
-        if (!$this->trivial || $this->field === "authorInformation") {
+    function script_expression(PaperInfo $row, $about) {
+        if ($about !== self::ABOUT_PAPER) {
+            return parent::script_expression($row, $about);
+        } else if (!$this->trivial || $this->field === "authorInformation") {
             return null;
         } else {
             return ["type" => $this->field, "match" => $this->trivial];
         }
     }
-    function configure_search($top, PaperSearch $srch) {
-        if ($this->regex) {
+    function prepare_visit($param, PaperSearch $srch) {
+        if ($param->want_field_highlighter() && $this->regex) {
             $srch->add_field_highlighter($this->type, $this->regex);
         }
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }
 
@@ -1436,8 +1540,8 @@ class PaperID_SearchTerm extends SearchTerm {
             return null;
         }
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
     static function parse_pidcode($word, SearchWord $sword, PaperSearch $srch) {
         if (($ids = SessionList::decode_ids($word)) === null) {

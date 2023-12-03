@@ -20,9 +20,9 @@ class EditFinal_SearchTerm extends SearchTerm {
         return "(Paper.outcome>0)";
     }
     function test(PaperInfo $row, $xinfo) {
-        return $row->can_author_edit_final_paper();
+        return $row->author_edit_state() === 2;
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

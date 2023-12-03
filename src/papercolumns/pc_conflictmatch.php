@@ -34,11 +34,11 @@ class ConflictMatch_PaperColumn extends PaperColumn {
         return !$pl->user->allow_administer($row);
     }
     function content(PaperList $pl, PaperInfo $row) {
-        $pref = $row->preference($this->contact);
+        $pf = $row->preference($this->contact);
         $potconf = $row->potential_conflict_html($this->contact, true);
-        if ($pref[0] <= -100) {
+        if ($pf->preference <= -100) {
             $potconf = $potconf ?? new PaperInfoPotentialConflictHTML;
-            $potconf->messages[] = ["<em>reviewer preference</em> " . unparse_preference($pref)];
+            $potconf->messages[] = ["<em>reviewer preference</em> " . $pf->unparse()];
         }
         $this->nonempty = !$row->has_author($this->contact) || $potconf;
         if (!$potconf || empty($potconf->messages)) {
@@ -54,18 +54,18 @@ class ConflictMatch_PaperColumn extends PaperColumn {
 
     /** @param string $name @unused-param
      * @param object $xfj @unused-param */
-    static function expand($name, Contact $user, $xfj, $m) {
-        if (!($fj = (array) $user->conf->basic_paper_column("potentialconflict", $user))) {
+    static function expand($name, XtParams $xtp, $xfj, $m) {
+        if (!($fj = (array) $xtp->conf->basic_paper_column("potentialconflict", $xtp->user))) {
             return null;
         }
         $rs = [];
-        foreach (ContactSearch::make_pc($m[1], $user)->users() as $u) {
+        foreach (ContactSearch::make_pc($m[1], $xtp->user)->users() as $u) {
             $fj["name"] = "potentialconflict:" . $u->email;
             $fj["user"] = $u->email;
             $rs[] = (object) $fj;
         }
         if (empty($rs)) {
-            PaperColumn::column_error($user, "<0>PC member ‘{$m[1]}’ not found");
+            PaperColumn::column_error($xtp, "<0>PC member ‘{$m[1]}’ not found");
         }
         return $rs;
     }

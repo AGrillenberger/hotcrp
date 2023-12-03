@@ -1,6 +1,6 @@
 <?php
 // searchexample.php -- HotCRP helper class for search examples
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class SearchExample {
     /** @var ?PaperOption */
@@ -38,6 +38,9 @@ class SearchExample {
         $this->q = $q;
         $this->description = $description;
         $this->arguments = $arguments;
+        if ($description !== "" && !Ftext::is_ftext($description)) {
+            error_log(debug_string_backtrace());
+        }
     }
 
     /** @param string $category

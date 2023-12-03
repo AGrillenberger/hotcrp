@@ -1,6 +1,6 @@
 <?php
 // pages/p_users.php -- HotCRP people listing/editing page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Users_Page {
     /** @var Conf */
@@ -9,7 +9,7 @@ class Users_Page {
     public $viewer;
     /** @var Qrequest */
     public $qreq;
-    /** @var array<string,string> */
+    /** @var array<string,string|array{label:string}> */
     public $limits;
     /** @var list<int> */
     private $papersel;
@@ -29,46 +29,44 @@ class Users_Page {
         }
         foreach ($this->conf->viewable_user_tags($viewer) as $t) {
             if ($t !== "pc")
-                $this->limits["#$t"] = "#$t program committee";
+                $this->limits["#{$t}"] = ["optgroup" => "PC tags", "label" => "#{$t} program committee"];
         }
-        if ($viewer->can_view_pc()
-            && $viewer->isPC) {
+        if ($viewer->isPC
+            && $viewer->can_view_pc()) {
             $this->limits["admin"] = "System administrators";
+            $this->limits["pcadmin"] = ["label" => "PC and system administrators", "exclude" => true];
         }
-        if ($viewer->can_view_pc()
-            && $viewer->isPC
-            && ($qreq->t === "pcadmin" || $qreq->t === "pcadminx")) {
-            $this->limits["pcadmin"] = "PC and system administrators";
-        }
-        if ($viewer->privChair
-            || ($viewer->isPC && $this->conf->setting("pc_seeallrev"))) {
+        if ($viewer->is_manager()
+            || ($viewer->isPC && $this->conf->setting("viewrev") > 0)) {
             $this->limits["re"] = "All reviewers";
             $this->limits["ext"] = "External reviewers";
             $this->limits["extsub"] = "External reviewers who completed a review";
+            $this->limits["extrev-not-accepted"] = "External reviewers with outstanding requests";
         }
         if ($viewer->isPC) {
-            $this->limits["req"] = "External reviewers you requested";
+            $this->limits["req"] = ["label" => "External reviewers you requested", "exclude" => !$viewer->is_requester()];
         }
-        if ($viewer->privChair
+        if ($viewer->is_manager()
             || ($viewer->isPC
                 && $this->conf->submission_blindness() !== Conf::BLIND_ALWAYS)) {
             $this->limits["au"] = "Contact authors of submitted papers";
         }
-        if ($this->conf->has_any_accepted()
-            && ($viewer->privChair
-                || ($viewer->isPC
-                    && $viewer->can_view_some_decision()
-                    && $viewer->can_view_some_authors()))) {
-            $this->limits["auacc"] = "Contact authors of accepted papers";
+        if ($viewer->is_manager()
+            || ($viewer->isPC
+                && $viewer->can_view_some_decision()
+                && $viewer->can_view_some_authors())) {
+            $this->limits["auacc"] = ["label" => "Contact authors of accepted papers", "exclude" => !$this->conf->has_any_accepted()];
         }
-        if ($viewer->privChair
+        if ($viewer->is_manager()
             || ($viewer->isPC
                 && $viewer->can_view_some_decision()
                 && $this->conf->submission_blindness() !== Conf::BLIND_ALWAYS)) {
             $this->limits["aurej"] = "Contact authors of rejected papers";
         }
-        if ($viewer->privChair) {
+        if ($viewer->is_manager()) {
             $this->limits["auuns"] = "Contact authors of non-submitted papers";
+        }
+        if ($viewer->privChair) {
             $this->limits["all"] = "Active users";
         }
     }
@@ -222,23 +220,23 @@ class Users_Page {
         if ($modifyfn === "disableaccount") {
             $j = UserActions::disable($this->viewer, $this->papersel);
             if ($j->disabled_users ?? false) {
-                $ms->success($this->conf->_("<0>Disabled accounts %#s", $j->disabled_users));
+                $ms->success($this->conf->_("<0>Disabled accounts {:list}", $j->disabled_users));
             }
         } else if ($modifyfn === "enableaccount") {
             $j = UserActions::enable($this->viewer, $this->papersel);
             if ($j->enabled_users ?? false) {
-                $ms->success($this->conf->_("<0>Enabled accounts %#s", $j->enabled_users));
+                $ms->success($this->conf->_("<0>Enabled accounts {:list}", $j->enabled_users));
             }
             if ($j->activated_users ?? false) {
-                $ms->success($this->conf->_("<0>Activated accounts and sent mail to %#s", $j->activated_users));
+                $ms->success($this->conf->_("<0>Activated accounts and sent mail to {:list}", $j->activated_users));
             }
         } else if ($modifyfn === "sendaccount") {
             $j = UserActions::send_account_info($this->viewer, $this->papersel);
             if ($j->mailed_users ?? false) {
-                $ms->success($this->conf->_("<0>Sent account information mail to %#s", $j->mailed_users));
+                $ms->success($this->conf->_("<0>Sent account information mail to {:list}", $j->mailed_users));
             }
             if ($j->skipped_users ?? false) {
-                $ms->msg_at(null, $this->conf->_("<0>Skipped disabled accounts %#s", $j->skipped_users), MessageSet::WARNING_NOTE);
+                $ms->msg_at(null, $this->conf->_("<0>Skipped disabled accounts {:list}", $j->skipped_users), MessageSet::WARNING_NOTE);
             }
         } else {
             return false;
@@ -261,9 +259,9 @@ class Users_Page {
             if ($t === "") {
                 /* nada */
             } else if (!($t = $tagger->check($t, Tagger::NOPRIVATE))) {
-                $ms->error_at(null, "<5>" . $tagger->error_html());
-            } else if (in_array(strtolower(Tagger::base($t)), ["pc", "admin", "chair"])) {
-                $ms->error_at(null, $this->conf->_("<0>User tag ‘{}’ reserved", Tagger::base($t)));
+                $ms->error_at(null, $tagger->error_ftext());
+            } else if (in_array(strtolower(Tagger::tv_tag($t)), ["pc", "admin", "chair"])) {
+                $ms->error_at(null, $this->conf->_("<0>User tag ‘{}’ reserved", Tagger::tv_tag($t)));
             } else {
                 $t1[] = $t;
             }
@@ -273,7 +271,7 @@ class Users_Page {
             $this->conf->feedback_msg($ms);
             return false;
         } else if (!count($t1)) {
-            $ms->warning_at(null, "No changes");
+            $ms->msg_at(null, "No changes", MessageSet::WARNING_NOTE);
             $this->conf->feedback_msg($ms);
             return false;
         }
@@ -331,14 +329,14 @@ class Users_Page {
     private function handle_redisplay() {
         $sv = [];
         foreach (ContactList::$folds as $key) {
-            $sv[] = "uldisplay.$key=" . ($this->qreq->get("show$key") ? 0 : 1);
+            $sv[] = "uldisplay.{$key}=" . ($this->qreq->get("show$key") ? 0 : 1);
         }
         foreach ($this->conf->all_review_fields() as $f) {
             if ($this->qreq["has_show{$f->short_id}"])
                 $sv[] = "uldisplay.{$f->short_id}=" . ($this->qreq["show{$f->short_id}"] ? 0 : 1);
         }
         if (isset($this->qreq->scoresort)) {
-            $sv[] = "ulscoresort=" . ListSorter::canonical_short_score_sort($this->qreq->scoresort);
+            $sv[] = "ulscoresort=" . ScoreInfo::parse_score_sort($this->qreq->scoresort);
         }
         Session_API::change_session($this->qreq, join(" ", $sv));
         $this->conf->redirect_self($this->qreq);
@@ -380,20 +378,19 @@ class Users_Page {
     }
 
     private function print_query_form(ContactList $pl) {
-        echo '<table id="contactsform" class="mb-3">
-<tr><td><div class="tlx"><div class="tld is-tla active" id="tla-default">';
+        echo '<div class="tlcontainer mb-3">';
 
-        echo Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
+        echo '<div class="tld is-tla active" id="default" role="tabpanel" aria-labelledby="tab-default">',
+            Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
         if (isset($this->qreq->sort)) {
             echo Ht::hidden("sort", $this->qreq->sort);
         }
         echo Ht::select("t", $this->limits, $this->qreq->t, ["class" => "want-focus uich js-users-selection"]),
-            " &nbsp;", Ht::submit("Go"), "</form>";
-
-        echo '</div><div class="tld is-tla" id="tla-view">';
+            " &nbsp;", Ht::submit("Go"), "</form></div>";
 
         // Display options
-        echo Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
+        echo '<div class="tld is-tla" id="view" role="tabpanel" aria-labelledby="tab-view">',
+            Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
         foreach (["t", "sort"] as $x) {
             if (isset($this->qreq[$x]))
                 echo Ht::hidden($x, $this->qreq[$x]);
@@ -437,24 +434,21 @@ class Users_Page {
 
         if (!empty($viewable_fields)) {
             $ss = [];
-            foreach (ListSorter::score_sort_selector_options() as $k => $v) {
+            foreach (ScoreInfo::score_sort_selector_options() as $k => $v) {
                 if (in_array($k, ["average", "variance", "maxmin"]))
                     $ss[$k] = $v;
             }
             echo '<tr><td colspan="3"><hr class="g"><b>Sort scores by:</b> &nbsp;',
-                Ht::select("scoresort", $ss, ListSorter::canonical_long_score_sort($this->qreq->csession("ulscoresort") ?? "A")),
+                Ht::select("scoresort", $ss, ScoreInfo::parse_score_sort($this->qreq->csession("ulscoresort") ?? "average")),
                 "</td></tr>";
         }
-        echo "</table></form>";
-
-        echo "</div></div></td></tr>\n";
+        echo "</table></form></div>";
 
         // Tab selectors
-        echo '<tr><td class="tllx"><table><tr>
-<td><div class="tll active"><a class="ui tla" href="">User selection</a></div></td>
-<td><div class="tll"><a class="ui tla" href="#view">View options</a></div></td>
-</tr></table></td></tr>
-</table>', "\n\n";
+        echo '<div class="tllx" role="tablist">',
+            '<div class="tll active" role="tab" id="tab-default" aria-controls="default" aria-selected="true"><a class="ui tla" href="">User selection</a></div>',
+            '<div class="tll" role="tab" id="tab-view" aria-controls="view" aria-selected="false"><a class="ui tla" href="#view">View options</a></div>',
+            '</div></div>', "\n\n";
     }
 
 
@@ -480,10 +474,15 @@ class Users_Page {
         ]);
 
 
+        $limit_title = $this->limits[$this->qreq->t];
+        if (!is_string($limit_title)) {
+            $limit_title = $limit_title["label"];
+        }
+
         $pl = new ContactList($this->viewer, true, $this->qreq);
         $pl_text = $pl->table_html($this->qreq->t,
             $this->conf->hoturl("users", ["t" => $this->qreq->t]),
-            $this->limits[$this->qreq->t], 'uldisplay.');
+            $limit_title, 'uldisplay.');
 
         echo '<hr class="g">';
         if (count($this->limits) > 1) {

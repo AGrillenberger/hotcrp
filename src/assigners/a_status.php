@@ -1,6 +1,6 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Status_Assignable extends Assignable {
     /** @var ?int */
@@ -46,8 +46,8 @@ class Withdraw_PreapplyFunction implements AssignmentPreapplyFunction {
             return;
         }
         $ltre = [];
-        foreach ($state->conf->tags()->filter("votish") as $dt) {
-            $ltre[] = preg_quote(strtolower($dt->tag));
+        foreach ($state->conf->tags()->entries_having(TagInfo::TFM_VOTES) as $ti) {
+            $ltre[] = $ti->tag_regex();
         }
         $res = $state->query(new Tag_Assignable($this->pid, null));
         $tag_re = '{\A(?:\d+~|)(?:' . join("|", $ltre) . ')\z}i';
@@ -104,8 +104,8 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                 }
                 $res->_withdrawn = Conf::$now;
                 $res->_submitted = -$res->_submitted;
-                if ($state->conf->tags()->has_votish) {
-                    Tag_AssignmentParser::load_tag_state($state);
+                if ($state->conf->tags()->has(TagInfo::TFM_VOTES)) {
+                    Tag_Assignable::load($state);
                     $state->register_preapply_function("withdraw {$prow->paperId}", new Withdraw_PreapplyFunction($prow->paperId));
                 }
             }
@@ -224,7 +224,7 @@ class Status_Assigner extends Assigner {
         // email reviewers
         foreach ($prow->reviewers_as_display() as $minic) {
             if (!in_array($minic->contactId, $sent)
-                && $minic->following_reviews($prow)
+                && $minic->following_reviews($prow, CommentInfo::CT_TOPIC_PAPER)
                 && ($p = HotCRPMailer::prepare_to($minic, "@withdrawreviewer", $rest))) {
                 if (!$minic->can_view_review_identity($prow, null)) {
                     $p->unique_preparation = true;

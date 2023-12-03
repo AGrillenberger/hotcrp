@@ -1,6 +1,6 @@
 <?php
 // author.php -- HotCRP author objects
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Author {
     /** @var string */
@@ -11,31 +11,35 @@ class Author {
     public $email = "";
     /** @var string */
     public $affiliation = "";
+    /** @var ?string */
+    private $_name;
+    /** @var null|Author|array{string,string,string} */
+    private $_deaccents;
     /** @var ?int */
     public $contactId;
     /** @var int */
     public $roles = 0;
     /** @var int */
-    public $disablement = 0;
-    /** @var ?string */
-    public $collaborators;
-    /** @var ?string */
-    private $_name;
-    /** @var ?array{string,string,string} */
-    private $_deaccents;
-    /** @var ?bool */
-    public $nonauthor;
-    /** @var ?int */
-    public $paperId;
+    private $disablement = 0;
     /** @var ?int */
     public $conflictType;
     /** @var ?int */
+    public $status;
+    /** @var ?int */
     public $author_index;
 
-    const COLLABORATORS_INDEX = -200;
+    const STATUS_AUTHOR = 1;
+    const STATUS_REVIEWER = 2;
+    const STATUS_ANONYMOUS_REVIEWER = 3;
+    const STATUS_PC = 4;
+    const STATUS_NONAUTHOR = 5;
 
-    /** @param null|string|object $x */
-    function __construct($x = null) {
+    const COLLABORATORS_INDEX = -200;
+    const UNINITIALIZED_INDEX = -400; // see also PaperConflictInfo
+
+    /** @param null|string|object $x
+     * @param null|1|2|3|4|5 $status */
+    function __construct($x = null, $status = null) {
         if (is_object($x)) {
             $this->firstName = $x->firstName;
             $this->lastName = $x->lastName;
@@ -44,6 +48,7 @@ class Author {
         } else if ($x !== null && $x !== "") {
             $this->assign_string($x);
         }
+        $this->status = $status;
     }
 
     /** @param string $s
@@ -92,6 +97,25 @@ class Author {
         return $au;
     }
 
+    /** @param Contact $u
+     * @return Author */
+    static function make_user($u) {
+        $au = new Author($u);
+        $au->contactId = $u->contactId;
+        $au->roles = $u->roles;
+        $au->disablement = $u->disabled_flags();
+        return $au;
+    }
+
+    /** @return $this */
+    function copy() {
+        $au = clone $this;
+        if (!is_object($this->_deaccents)) {
+            $au->_deaccents = $this;
+        }
+        return $au;
+    }
+
     /** @param Author|Contact $o */
     function merge($o) {
         if ($this->email === "") {
@@ -100,10 +124,12 @@ class Author {
         if ($this->firstName === "" && $this->lastName === "") {
             $this->firstName = $o->firstName;
             $this->lastName = $o->lastName;
+            $this->_name = null;
         }
         if ($this->affiliation === "") {
             $this->affiliation = $o->affiliation;
         }
+        $this->_deaccents = null;
     }
 
     /** @param string $s */
@@ -237,6 +263,9 @@ class Author {
     /** @param 0|1|2 $component
      * @return string */
     function deaccent($component) {
+        if (is_object($this->_deaccents)) {
+            return $this->_deaccents->deaccent($component);
+        }
         if ($this->_deaccents === null) {
             $this->_deaccents = [
                 strtolower(UnicodeHelper::deaccent($this->firstName)),
@@ -256,6 +285,21 @@ class Author {
     function is_conflicted() {
         assert($this->conflictType !== null);
         return $this->conflictType > CONFLICT_MAXUNCONFLICTED;
+    }
+
+    /** @return bool */
+    function is_nonauthor() {
+        return $this->status === self::STATUS_NONAUTHOR;
+    }
+
+    /** @return bool */
+    function is_placeholder() {
+        return ($this->disablement & Contact::CFLAG_PLACEHOLDER) !== 0;
+    }
+
+    /** @return int */
+    function disabled_flags() {
+        return $this->disablement;
     }
 
     /** @param Author|Contact $x
@@ -292,6 +336,16 @@ class Author {
         }
         if ($x->affiliation !== "") {
             $j["affiliation"] = $x->affiliation;
+        }
+        return $j;
+    }
+
+    /** @return array<string,string> */
+    function unparse_debug_json() {
+        $j = [];
+        foreach (get_object_vars($this) as $k => $v) {
+            if (!str_starts_with($k, "_") && $v !== null && $v !== "")
+                $j[$k] = $v;
         }
         return $j;
     }

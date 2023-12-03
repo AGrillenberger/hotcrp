@@ -30,12 +30,12 @@ class ManualAssign_Page {
             }
         }
 
-        $confset = $this->conf->conflict_types();
+        $confset = $this->conf->conflict_set();
         $assignments = [];
         foreach ($this->viewer->paper_set(["paperId" => $pids, "reviewSignatures" => true]) as $row) {
             $name = "assrev{$row->paperId}u{$rcid}";
             if (!isset($this->qreq[$name])
-                || ($assrev = cvtint($this->qreq[$name], null)) === null) {
+                || ($assrev = stoi($this->qreq[$name])) === null) {
                 continue;
             }
 
@@ -126,7 +126,7 @@ class ManualAssign_Page {
         foreach ($reviewer->aucollab_matchers() as $matcher) {
             $text = "match:\"" . str_replace("\"", "", $matcher->name(NAME_P|NAME_A)) . "\"";
             $hlsearch[] = "au" . $text;
-            if (!$matcher->nonauthor && $this->conf->setting("sub_collab")) {
+            if (!$matcher->is_nonauthor() && $this->conf->setting("sub_collab")) {
                 $hlsearch[] = "co" . $text;
             }
         }
@@ -150,11 +150,11 @@ class ManualAssign_Page {
         // Conflict information
         $any = false;
         foreach ($reviewer->collaborator_generator() as $m) {
-            echo ($any ? ';</span> ' : '<div class="f-i"><label>Collaborators</label>'),
-                '<span class="nw">', $m->name_h(NAME_A);
+            echo ($any ? "" : "<div class=\"f-i\"><label>Collaborators</label><ul class=\"semi\">"),
+                '<li>', $m->name_h(NAME_A), '</li>';
             $any = true;
         }
-        echo $any ? '</span></div>' : '';
+        echo $any ? '</ul></div>' : '';
 
         $show = " show:au" . ($this->conf->setting("sub_collab") ? " show:co" : "");
         echo '<div class="f-i">',
@@ -171,15 +171,15 @@ class ManualAssign_Page {
             $search->set_field_highlighter_query(join(" OR ", $hlsearch));
         }
         $pl = new PaperList("reviewAssignment", $search, ["sort" => true], $this->qreq);
-        $pl->apply_view_session();
-        $pl->apply_view_qreq();
-        echo Ht::form($this->conf->hoturl("=manualassign", ["reviewer" => $reviewer->email, "sort" => $this->qreq->sort]), ["class" => "assignpc ignore-diff"]),
+        $pl->apply_view_session($this->qreq);
+        $pl->apply_view_qreq($this->qreq);
+        echo Ht::form($this->conf->hoturl("=manualassign", ["reviewer" => $reviewer->email, "sort" => $this->qreq->sort]), ["class" => "need-diff-check assignpc ignore-diff"]),
             Ht::hidden("t", $this->qreq->t),
             Ht::hidden("q", $this->qreq->q);
         $rev_rounds = $this->conf->round_selector_options(false);
         $expected_round = $this->conf->assignment_round_option(false);
 
-        echo '<div id="searchform" class="mb-3 has-fold fold10', $pl->viewing("authors") ? "o" : "c", '">';
+        echo '<div class="tlcontainer mb-3 has-fold fold10', $pl->viewing("authors") ? "o" : "c", '">';
         if (count($rev_rounds) > 1) {
             echo '<div class="entryi"><label for="assrevround">Review round</label><div class="entry">',
                 Ht::select("rev_round", $rev_rounds, $this->qreq->rev_round ? : $expected_round, ["id" => "assrevround", "class" => "ignore-diff"]), ' <span class="barsep">·</span> ';
@@ -202,8 +202,8 @@ class ManualAssign_Page {
             Ht::submit("update", "Save assignments", ["class" => "btn-primary big"]), '</div></div>';
         echo '</div>';
 
-        $pl->set_table_id_class("foldpl", "pltable-fullw remargin-left remargin-right");
-        $pl->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_LIST);
+        $pl->set_table_id_class("pl", null);
+        $pl->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_LIST | PaperList::DECOR_FULLWIDTH);
         echo '<div class="pltable-fullw-container demargin">';
         $pl->print_table_html();
         echo '</div>';
@@ -211,13 +211,13 @@ class ManualAssign_Page {
         echo '<div class="aab aabr aabig mt-2"><div class="aabut">',
             Ht::submit("update", "Save assignments", ["class" => "btn-primary"]),
             "</div></div></form>\n";
-        Ht::stash_script('hotcrp.highlight_form_children("form.assignpc");$("#assrevimmediate").trigger("change");'
+        Ht::stash_script('$("form.assignpc").awaken();$("#assrevimmediate").trigger("change");'
             . "$(\"#showau\").on(\"change\", function () { hotcrp.foldup.call(this, null, {n:10}) })");
     }
 
 
     function print(Contact $reviewer = null) {
-        $this->qreq->print_header("Assignments", "assignpc", ["subtitle" => "Manual"]);
+        $this->qreq->print_header("Assignments", "manualassign", ["subtitle" => "Manual"]);
         echo '<nav class="papmodes mb-5 clearfix"><ul>',
             '<li class="papmode"><a href="', $this->conf->hoturl("autoassign"), '">Automatic</a></li>',
             '<li class="papmode active"><a href="', $this->conf->hoturl("manualassign"), '">Manual</a></li>',
@@ -258,8 +258,8 @@ class ManualAssign_Page {
 
         // Change PC member
         echo "<table><tr><td><div class=\"assignpc_pcsel\">",
-            Ht::form($this->conf->hoturl("manualassign"), ["method" => "get", "id" => "selectreviewerform"]);
-        Ht::stash_script('hotcrp.highlight_form_children("#selectreviewerform")');
+            Ht::form($this->conf->hoturl("manualassign"), ["method" => "get", "id" => "selectreviewerform", "class" => "need-diff-check"]);
+        Ht::stash_script('$("#selectreviewerform").awaken()');
 
         $acs = AssignmentCountSet::load($this->viewer, AssignmentCountSet::HAS_REVIEW);
         $rev_opt = [];
@@ -280,7 +280,7 @@ class ManualAssign_Page {
             Ht::entry("q", $this->qreq->q, [
                 "id" => "manualassignq", "size" => 40, "placeholder" => "(All)",
                 "class" => "papersearch want-focus need-suggest", "aria-label" => "Search",
-                "spellcheck" => false
+                "spellcheck" => false, "autocomplete" => "off"
             ]), " &nbsp;in &nbsp;",
             PaperSearch::limit_selector($this->conf, $this->limits, $this->qreq->t),
             "</td></tr>\n",

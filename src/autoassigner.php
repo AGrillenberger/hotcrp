@@ -45,6 +45,10 @@ class AutoassignerUser {
     /** @var int */
     public $load = 0;
     /** @var int */
+    public $max_load = PHP_INT_MAX;
+    /** @var int|float */
+    public $balance = 0;
+    /** @var int */
     public $unhappiness = 0;
     /** @var int */
     public $pref_index_bound = -1;
@@ -66,6 +70,7 @@ class AutoassignerUser {
     /** @return bool */
     function assignments_complete() {
         return ($this->ndesired >= 0 && count($this->newass) >= $this->ndesired)
+            || $this->load >= $this->max_load
             || $this->work_list === [];
     }
 }
@@ -179,6 +184,24 @@ abstract class Autoassigner extends MessageSet {
         }
     }
 
+    /** @param array<string,mixed> $args
+     * @param string $field
+     * @return ?non-empty-string */
+    function extract_tag($args, $field) {
+        $tag = trim((string) ($args[$field] ?? ""));
+        if ($tag === "") {
+            return null;
+        }
+        $tagger = new Tagger($this->user);
+        $tag = $tagger->check($tag, Tagger::NOVALUE);
+        if ($tag === null || $tag === "") {
+            $this->error_at($field, $tagger->error_ftext(true));
+            return null;
+        } else {
+            return $tag;
+        }
+    }
+
     /** @param array<string,mixed> $args */
     function extract_balance_method($args) {
         if (($b = $args["balance"] ?? null) !== null) {
@@ -190,6 +213,13 @@ abstract class Autoassigner extends MessageSet {
                 $this->error_at("balance", "<0>Balance should be ‘all’ or ‘new’");
             }
         }
+        if (($bt = $this->extract_tag($args, "balance_offset_tag")) !== null) {
+            foreach ($this->acs as $ac) {
+                if (($tv = $ac->user->tag_value($bt))) {
+                    $ac->balance += $tv;
+                }
+            }
+        }
         if (($m = $args["method"] ?? null) !== null) {
             if ($m === "default" || $m === "mincost") {
                 $this->method = self::METHOD_MCMF;
@@ -199,6 +229,30 @@ abstract class Autoassigner extends MessageSet {
                 $this->method = self::METHOD_STUPID;
             } else {
                 $this->error_at("method", "<0>Method should be ‘default’ or ‘random’");
+            }
+        }
+    }
+
+    /** @param array<string,mixed> $args */
+    function extract_max_load($args) {
+        if (($ml = $this->extract_tag($args, "max_load_tag"))) {
+            foreach ($this->acs as $ac) {
+                $tv = $ac->user->tag_value($ml);
+                if ($tv !== null && $tv >= 0) {
+                    $ac->max_load = min((int) round($tv), $ac->max_load);
+                }
+            }
+        }
+        if (($m = $args["max_load"] ?? null) !== null) {
+            if (is_string($m)) {
+                $m = stoi($m) ?? -1;
+            }
+            if (!is_int($m) || $m <= 0) {
+                $this->error_at("max_load", "<0>Maximum load should be a positive number");
+            } else {
+                foreach ($this->acs as $ac) {
+                    $ac->max_load = min($m, $ac->max_load);
+                }
             }
         }
     }
@@ -218,7 +272,17 @@ abstract class Autoassigner extends MessageSet {
     }
 
     /** @param string $column
-     * @param null|string|AutoassignerComputed $value */
+     * @return null|string|AutoassignerComputed */
+    function assignment_column($column) {
+        $v = $this->ass_extra[$column] ?? null;
+        if (is_string($v)) {
+            $v = CsvGenerator::unquote(substr($v, 1));
+        }
+        return $v;
+    }
+
+    /** @param string $column
+     * @param null|string $value */
     function set_assignment_column($column, $value) {
         assert(empty($this->ass) || $value === null || isset($this->ass_extra[$column]));
         if ($value === null) {
@@ -233,6 +297,13 @@ abstract class Autoassigner extends MessageSet {
             }
             $this->ass_extra[$column] = $value;
         }
+    }
+
+    /** @param string $column */
+    function set_computed_assignment_column($column) {
+        assert(in_array($column, ["preference", "expertise", "topic_score", "unhappiness", "name"]));
+        /** @phan-suppress-next-line PhanTypeMismatchArgumentProbablyReal */
+        $this->set_assignment_column($column, new AutoassignerComputed);
     }
 
 
@@ -269,9 +340,12 @@ abstract class Autoassigner extends MessageSet {
 
     /** @param int $uid
      * @param int $load */
-    protected function set_aauser_load($uid, $load) {
+    protected function add_aauser_load($uid, $load) {
         if (($ac = $this->aauser($uid))) {
-            $ac->load = $load;
+            $ac->load += $load;
+            if ($this->balance === self::BALANCE_ALL) {
+                $ac->balance += $load;
+            }
         }
     }
 
@@ -367,7 +441,7 @@ abstract class Autoassigner extends MessageSet {
             $nu = 0;
             foreach ($this->acs as $ac) {
                 if ($ac->ndesired >= 0) {
-                    $nu += $ac->ndesired;
+                    $nu += min($ac->ndesired, max($ac->max_load - $ac->load, 0));
                 } else {
                     $nu = PHP_INT_MAX;
                     break;
@@ -434,6 +508,7 @@ abstract class Autoassigner extends MessageSet {
 
         $ac->newass[] = $pid;
         ++$ac->load;
+        ++$ac->balance;
         ++$ap->nassigned;
         if ($a) {
             $a->eass = self::ENEWASSIGN;
@@ -563,7 +638,10 @@ abstract class Autoassigner extends MessageSet {
             // process conflicts and preferences
             foreach ($this->acs as $ac) {
                 $a = $this->ainfo[$ac->cid][$pid];
-                list($a->pref, $a->exp, $a->topicscore) = $row->preference($ac->user, true);
+                $pf = $row->preference($ac->user);
+                $a->pref = $pf->preference;
+                $a->exp = $pf->expertise;
+                $a->topicscore = $row->topic_interest_score($ac->user);
                 if ($a->eass < self::ENOASSIGN
                     && ($row->has_conflict($ac->user)
                         || !$ac->user->can_accept_review_assignment($row))) {
@@ -611,7 +689,7 @@ abstract class Autoassigner extends MessageSet {
 
     /** @param AutoassignerUser $ac */
     protected function assign_from_work_list($ac) {
-        while (!empty($ac->work_list)) {
+        while (!empty($ac->work_list) && $ac->load < $ac->max_load) {
             $pid = array_pop($ac->work_list);
             // skip if not assignable
             if (!($ap = $this->aps[$pid] ?? null)
@@ -634,9 +712,9 @@ abstract class Autoassigner extends MessageSet {
         $this->make_work_lists(false);
         $acs = $this->acs;
         while (!empty($acs)) {
-            // choose a pc member at random, equalizing load
+            // choose a least-balanced pc member
             $ac = self::choose_aauser($acs, function ($ac, $bc) {
-                return $ac->load <=> $bc->load;
+                return $ac->balance <=> $bc->balance;
             });
 
             // choose a paper from the work list
@@ -653,9 +731,10 @@ abstract class Autoassigner extends MessageSet {
         $this->make_work_lists(true);
         $acs = $this->acs;
         while (!empty($acs)) {
-            // choose a pc member at random, equalizing load, min unhappiness
+            // choose a least-balanced pc member, min unhappiness
             $ac = self::choose_aauser($acs, function ($ac, $bc) {
-                return $ac->load <=> $bc->load ? : $ac->unhappiness <=> $bc->unhappiness;
+                return $ac->balance <=> $bc->balance
+                    ? : $ac->unhappiness <=> $bc->unhappiness;
             });
 
             // choose a paper from the work list
@@ -729,19 +808,21 @@ abstract class Autoassigner extends MessageSet {
         }
         // user nodes
         $assperpc = ceil($nass / $this->user_count());
-        $minload = PHP_INT_MAX;
+        $minload = $minbalance = PHP_INT_MAX;
         $maxload = $assperpc;
         foreach ($this->acs as $ac) {
             $minload = min($minload, $ac->load);
             $maxload = max($maxload, $ac->load + $assperpc);
+            $minbalance = min($minbalance, $ac->balance);
         }
         foreach ($this->acs as $cid => $ac) {
             $m->add_node("u{$cid}", "u");
             if ($ac->ndesired >= 0) {
                 $m->add_edge(".source", "u{$cid}", $ac->ndesired, 0, count($ac->newass ?? []));
             } else {
-                for ($l = $ac->load; $l < $maxload; ++$l) {
-                    $m->add_edge(".source", "u{$cid}", 1, $this->costs->assignment * ($l - $minload));
+                for ($ld = 0; $ac->load + $ld < min($maxload, $ac->max_load); ++$ld) {
+                    $c = $ac->balance + $ld - $minbalance;
+                    $m->add_edge(".source", "u{$cid}", 1, $this->costs->assignment * $c);
                 }
             }
             if ($ceass[$cid]) {
@@ -827,6 +908,7 @@ abstract class Autoassigner extends MessageSet {
         if ($m->mincost_start_at) {
             $this->profile["mincost"] = $m->mincost_end_at - $m->mincost_start_at;
         }
+        $this->profile["memory"] = memory_get_usage();
         $this->mcmf = null;
         $this->profile["traverse"] = microtime(true) - $time;
         return $nassigned;

@@ -1,6 +1,6 @@
 <?php
 // s3verifyall.php -- HotCRP maintenance script
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -102,7 +102,7 @@ class S3VerifyAll_Batch {
             $last_key = (string) $node->Key;
             if ((!$match_re || preg_match($match_re, $last_key))
                 && preg_match($key_re, $last_key, $m)
-                && ($khash = Filer::hash_as_binary($m[1])) !== false) {
+                && ($khash = Filer::hash_as_binary($m[1]))) {
                 if ($this->verbose) {
                     fwrite(STDOUT, "$last_key: ");
                 }
@@ -140,7 +140,7 @@ Usage: php batch/s3verifyall.php [-n CONFID | --config CONFIG] [-c COUNT] [-m MA
          ->parse($argv);
 
         $conf = initialize_conf($arg["config"] ?? null, $arg["name"] ?? null);
-        if (!$conf->setting_data("s3_bucket")) {
+        if (!$conf->s3_client()) {
             throw new ErrorException("S3 is not configured for this conference");
         }
         return new S3VerifyAll_Batch($conf, $arg);

@@ -1,16 +1,15 @@
 <?php
 // o_topics.php -- HotCRP helper class for topics intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Topics_PaperOption extends CheckboxesBase_PaperOption {
+    /** @var bool */
+    private $_add_topics = false;
+
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
-        if ($conf->setting("has_topics")) {
-            $this->min_count = $conf->setting("topic_min") ?? $this->min_count;
-            $this->max_count = $conf->setting("topic_max") ?? 0;
-            $this->required = $this->min_count > 0;
-        } else {
-            $this->set_exists_condition(false);
+        if (!$this->conf->has_topics()) {
+            $this->override_exists_condition(false);
         }
     }
 
@@ -34,37 +33,52 @@ class Topics_PaperOption extends CheckboxesBase_PaperOption {
         return $user ? $user->topic_interest_map() : [];
     }
 
-    function update_value_list(PaperValue $ov, PaperStatus $ps) {
-        if ($ps->add_topics()) {
-            $vs = $ov->value_list();
-            $newvs = $ov->anno("new_values");
-            '@phan-var list<string> $newvs';
-            $lctopics = $newids = [];
-            foreach ($newvs as $tk) {
-                if (!in_array(strtolower($tk), $lctopics)) {
-                    $lctopics[] = strtolower($tk);
-                    $result = $ps->conf->qe("insert into TopicArea set topicName=?", $tk);
-                    $vs[] = $result->insert_id;
-                }
-            }
-            if (!$this->conf->has_topics()) {
-                $this->conf->save_setting("has_topics", 1);
-            }
-            $this->conf->invalidate_topics();
-            $ov->set_value_data($vs, array_fill(0, count($vs), null));
-            $ov->set_anno("bad_values", array_values(array_diff($ov->anno("bad_values"), $newvs)));
+    /** @param bool $allow */
+    function allow_new_topics($allow) {
+        $this->_add_topics = $allow;
+        $x = $allow || $this->conf->has_topics() ? null : false;
+        $this->override_exists_condition($x);
+    }
+
+    function value_store_new_values(PaperValue $ov, PaperStatus $ps) {
+        if (!$this->_add_topics) {
+            return;
         }
+        $vs = $ov->value_list();
+        $newvs = $ov->anno("new_values");
+        '@phan-var list<string> $newvs';
+        $lctopics = $newids = [];
+        foreach ($newvs as $tk) {
+            if (in_array(strtolower($tk), $lctopics)) {
+                continue;
+            }
+            $lctopics[] = strtolower($tk);
+            $result = $ps->conf->qe("insert into TopicArea set topicName=?", $tk);
+            $vs[] = $result->insert_id;
+        }
+        if (!$this->conf->has_topics()) {
+            $this->conf->save_refresh_setting("has_topics", 1);
+        }
+        $this->conf->invalidate_topics();
+        $ov->set_value_data($vs, array_fill(0, count($vs), null));
+        $ov->set_anno("bad_values", array_values(array_diff($ov->anno("bad_values"), $newvs)));
     }
 
 
     function value_force(PaperValue $ov) {
-        $vs = $ov->prow->topic_list();
-        $ov->set_value_data($vs, array_fill(0, count($vs), null));
+        if ($this->id === PaperOption::TOPICSID) {
+            $vs = $ov->prow->topic_list();
+            $ov->set_value_data($vs, array_fill(0, count($vs), null));
+        }
     }
 
     function value_save(PaperValue $ov, PaperStatus $ps) {
-        $ps->change_at($this);
-        $ps->_topic_ins = $ov->value_list();
-        return true;
+        if ($this->id === PaperOption::TOPICSID) {
+            $ps->change_at($this);
+            $ov->prow->set_prop("topicIds", join(",", $ov->value_list()));
+            return true;
+        } else {
+            return false;
+        }
     }
 }

@@ -15,6 +15,14 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     private $_path;
     /** @var string */
     private $_method;
+    /** @var ?array<string,string> */
+    private $_headers;
+    /** @var int */
+    private $_body_type = 0;
+    /** @var ?string */
+    private $_body;
+    /** @var ?string */
+    private $_body_filename;
     /** @var array<string,string> */
     private $_v;
     /** @var array<string,list> */
@@ -37,6 +45,9 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     static public $main_request;
 
     const ARRAY_MARKER = "__array__";
+    const BODY_NONE = 0;
+    const BODY_INPUT = 1;
+    const BODY_SET = 2;
 
     /** @param string $method
      * @param array<string,string> $data */
@@ -154,6 +165,81 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     /** @return ?string */
     function referrer() {
         return $this->_referrer;
+    }
+
+    /** @param string $k
+     * @return ?string */
+    function header($k) {
+        return $this->_headers["HTTP_" . strtoupper(str_replace("-", "_", $k))] ?? null;
+    }
+
+    /** @param string $k
+     * @param ?string $v */
+    function set_header($k, $v) {
+        $this->_headers["HTTP_" . strtoupper(str_replace("-", "_", $k))] = $v;
+    }
+
+    /** @return ?string */
+    function body() {
+        if ($this->_body === null && $this->_body_type === self::BODY_INPUT) {
+            $this->_body = file_get_contents("php://input");
+        }
+        return $this->_body;
+    }
+
+    /** @param ?string $extension
+     * @return ?string */
+    function body_filename($extension = null) {
+        if ($this->_body_filename === null && $this->_body_type !== self::BODY_NONE) {
+            if (!($tmpdir = tempdir())) {
+                return null;
+            }
+            $extension = $extension ?? Mimetype::extension($this->header("Content-Type"));
+            $fn = $tmpdir . "/" . strtolower(encode_token(random_bytes(6))) . $extension;
+            if ($this->_body_type === self::BODY_INPUT) {
+                $ok = copy("php://input", $fn);
+            } else {
+                $ok = file_put_contents($this->_body, $fn) === strlen($this->_body);
+            }
+            if ($ok) {
+                $this->_body_filename = $fn;
+            }
+        }
+        return $this->_body_filename;
+    }
+
+    /** @return ?string */
+    function body_content_type() {
+        if ($this->_body_type === self::BODY_NONE) {
+            return null;
+        } else if (($ct = $this->header("Content-Type"))) {
+            return Mimetype::type($ct);
+        }
+        $b = $this->_body;
+        if ($b === null && $this->_body_type === self::BODY_INPUT) {
+            $b = file_get_contents("php://input", false, null, 0, 4096);
+        }
+        $b = (string) $b;
+        if (str_starts_with($b, "\x50\x4B\x03\x04")) {
+            return "application/zip";
+        } else if (preg_match('/\A\s*[\[\{]/s', $b)) {
+            return "application/json";
+        } else {
+            return null;
+        }
+    }
+
+    /** @param string $body
+     * @param ?string $content_type
+     * @return $this */
+    function set_body($body, $content_type = null) {
+        $this->_body_type = self::BODY_SET;
+        $this->_body_filename = null;
+        $this->_body = $body;
+        if ($content_type !== null) {
+            $this->set_header("Content-Type", $content_type);
+        }
+        return $this;
     }
 
     #[\ReturnTypeWillChange]
@@ -304,7 +390,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
      * @return $this */
     function set_file_content($name, $content, $filename = null, $mimetype = null) {
         $this->_files[$name] = new QrequestFile([
-            "name" => $filename ?? "__set_file_content.$name",
+            "name" => $filename ?? "__set_file_content.{$name}",
             "type" => $mimetype,
             "size" => strlen($content),
             "content" => $content
@@ -396,9 +482,10 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     function set_annex($name, $x) {
         $this->_annexes[$name] = $x;
     }
-    /** @return void */
+    /** @return $this */
     function approve_token() {
         $this->_post_ok = true;
+        return $this;
     }
     /** @return bool */
     function valid_token() {
@@ -421,19 +508,17 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
      * @return ?bool */
     function xt_allow($e) {
         if ($e === "post") {
-            return $this->_method === "POST" && $this->_post_ok;
+            return $this->_post_ok && $this->_method === "POST";
         } else if ($e === "anypost") {
             return $this->_method === "POST";
         } else if ($e === "getpost") {
             return in_array($this->_method, ["POST", "GET", "HEAD"]) && $this->_post_ok;
+        } else if ($e === "get") {
+            return $this->_method === "GET";
+        } else if ($e === "head") {
+            return $this->_method === "HEAD";
         } else if (str_starts_with($e, "req.")) {
-            foreach (explode(" ", $e) as $w) {
-                if (str_starts_with($w, "req.")
-                    && $this->has(substr($w, 4))) {
-                    return true;
-                }
-            }
-            return false;
+            return $this->has(substr($e, 4));
         } else {
             return null;
         }
@@ -461,9 +546,11 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         if (empty($_POST)) {
             $qreq->set_post_empty();
         }
+        $qreq->_headers = $_SERVER;
         if (isset($_SERVER["HTTP_REFERER"])) {
             $qreq->set_referrer($_SERVER["HTTP_REFERER"]);
         }
+        $qreq->_body_type = empty($_POST) ? self::BODY_INPUT : self::BODY_NONE;
 
         // $_FILES requires special processing since we want error messages.
         $errors = [];
@@ -514,9 +601,42 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     }
 
 
+    /** @param string $name
+     * @param string $value
+     * @param array $opt */
+    function set_cookie_opt($name, $value, $opt) {
+        $opt["path"] = $opt["path"] ?? $this->_navigation->base_path;
+        $opt["domain"] = $opt["domain"] ?? $this->_conf->opt("sessionDomain") ?? "";
+        $opt["secure"] = $opt["secure"] ?? $this->_conf->opt("sessionSecure") ?? false;
+        if (!isset($opt["samesite"])) {
+            $samesite = $this->_conf->opt("sessionSameSite") ?? "Lax";
+            if ($samesite && ($opt["secure"] || $samesite !== "None")) {
+                $opt["samesite"] = $samesite;
+            }
+        }
+        if (!hotcrp_setcookie($name, $value, $opt)) {
+            error_log(debug_string_backtrace());
+        }
+    }
+
+    /** @param string $name
+     * @param string $value
+     * @param int $expires_at */
+    function set_cookie($name, $value, $expires_at) {
+        $this->set_cookie_opt($name, $value, ["expires" => $expires_at]);
+    }
+
+    /** @param string $name
+     * @param string $value
+     * @param int $expires_at */
+    function set_httponly_cookie($name, $value, $expires_at) {
+        $this->set_cookie_opt($name, $value, ["expires" => $expires_at, "httponly" => true]);
+    }
+
+
     /** @param string|list<string> $title
      * @param string $id
-     * @param array{paperId?:int|string,body_class?:string,action_bar?:string,title_div?:string,subtitle?:string,save_messages?:bool} $extra */
+     * @param array{paperId?:int|string,body_class?:string,action_bar?:string,title_div?:string,subtitle?:string,save_messages?:bool,hide_title?:bool} $extra */
     function print_header($title, $id, $extra = []) {
         if (!$this->_conf->_header_printed) {
             $this->_conf->print_head_tag($this, $title, $extra);
@@ -525,8 +645,9 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     }
 
     function print_footer() {
-        echo "<hr class=\"c\"></div>", // class='body'
-            '<div id="footer">',
+        echo '<hr class="c"></div>', // close #p-body
+            '</div>',                // close #p-page
+            '<div id="p-footer">',
             $this->_conf->opt("extraFooter") ?? "",
             '<a class="noq" href="https://hotcrp.com/">HotCRP</a>';
         if (!$this->_conf->opt("noFooterVersion")) {
@@ -638,18 +759,22 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         }
     }
 
-    /** @param bool $allow_empty
-     * @return string */
-    function post_value($allow_empty = false) {
-        $sid = $this->_qsession->sid;
-        if ($sid === null && !$allow_empty) {
+    /** @return string */
+    function post_value() {
+        if ($this->_qsession->sid === null) {
             $this->_qsession->open();
-            $sid = $this->_qsession->sid;
         }
-        if ($sid === null || $sid === "") {
+        return $this->maybe_post_value();
+    }
+
+    /** @return string */
+    function maybe_post_value() {
+        $sid = $this->_qsession->sid ?? "";
+        if ($sid !== "") {
+            return urlencode(substr($sid, strlen($sid) > 16 ? 8 : 0, 12));
+        } else {
             return ".empty";
         }
-        return urlencode(substr($sid, strlen($sid) > 16 ? 8 : 0, 12));
     }
 }
 

@@ -1,6 +1,6 @@
 <?php
 // reviewfield.php -- HotCRP helper class for producing review forms and tables
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 // JSON schema for settings["review_form"]:
 // [{"id":FIELDID,"name":NAME,"description":DESCRIPTION,"order":ORDER,
@@ -387,7 +387,7 @@ abstract class ReviewField implements JsonSerializable {
 
     /** @return string */
     function web_abbreviation() {
-        return '<span class="need-tooltip" data-tooltip="' . $this->name_html
+        return '<span class="need-tooltip" aria-label="' . $this->name_html
             . '" data-tooltip-anchor="s">' . htmlspecialchars($this->search_keyword()) . "</span>";
     }
 
@@ -456,12 +456,12 @@ abstract class ReviewField implements JsonSerializable {
 
     /** @param ?string $id
      * @param ?string $label_for
-     * @param ?ReviewValues $rvalues
+     * @param ReviewValues $rvalues
      * @param ?array{name_html?:string,label_class?:string} $args */
     protected function print_web_edit_open($id, $label_for, $rvalues, $args = null) {
         echo '<div class="rf rfe" data-rf="', $this->uid(),
             '"><h3 class="',
-            $rvalues ? $rvalues->control_class($this->short_id, "rfehead") : "rfehead";
+            $rvalues->control_class($this->short_id, "rfehead");
         if ($id !== null) {
             echo '" id="', $id;
         }
@@ -476,10 +476,7 @@ abstract class ReviewField implements JsonSerializable {
         if (($rd = self::visibility_description($this->view_score)) !== "") {
             echo '<div class="field-visibility">(', $rd, ')</div>';
         }
-        echo '</h3>';
-        if ($rvalues) {
-            echo $rvalues->feedback_html_at($this->short_id);
-        }
+        echo '</h3>', $rvalues->feedback_html_at($this->short_id);
         if ($this->description) {
             echo '<div class="field-d">', $this->description, "</div>";
         }
@@ -487,7 +484,7 @@ abstract class ReviewField implements JsonSerializable {
 
     /** @param int|string $fval
      * @param ?string $reqstr
-     * @param ?ReviewValues $rvalues
+     * @param ReviewValues $rvalues
      * @param array{format:?TextFormat} $args */
     abstract function print_web_edit($fval, $reqstr, $rvalues, $args);
 
@@ -661,8 +658,11 @@ abstract class Discrete_ReviewField extends ReviewField {
      * @return string */
     abstract function unparse_graph($sci, $style);
 
-    /** @param array<int,int> $fmap */
-    function renumber_values($fmap) {
+    /** @param array<int,int> $fmap
+     * @param int $fval
+     * @return ?int */
+    function renumber_value($fmap, $fval) {
+        return $fval;
     }
 }
 
@@ -688,7 +688,7 @@ abstract class DiscreteValues_ReviewField extends Discrete_ReviewField {
         if (isset($j->symbols) && !isset($j->values)) {
             $this->values = array_fill(0, count($j->symbols), "");
         } else {
-            $this->values = $j->values ?? $j->options ?? [];
+            $this->values = $j->values ?? $j->options /* XXX */ ?? [];
         }
         $nvalues = count($this->values);
         if (isset($j->symbols) && count($j->symbols) === $nvalues) {
@@ -1311,10 +1311,8 @@ class Score_ReviewField extends DiscreteValues_ReviewField {
         return Discrete_ReviewFieldSearch::parse_score($sword, $this, $rsm, $srch);
     }
 
-    function renumber_values($fmap) {
-        ReviewForm_SettingParser::renumber_values($this, function ($v) use ($fmap) {
-            return $fmap[$v] ?? $v;
-        });
+    function renumber_value($fmap, $fval) {
+        return $fmap[$fval] ?? $fval;
     }
 }
 

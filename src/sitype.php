@@ -1,6 +1,6 @@
 <?php
 // sitype.php -- HotCRP conference settings types
-// Copyright (c) 2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2022-2023 Eddie Kohler; see LICENSE.
 
 abstract class Sitype {
     /** @var associative-array<string,class-string> */
@@ -429,6 +429,8 @@ class String_Sitype extends Sitype {
     private $long = false;
     /** @var bool */
     private $allow_int = false;
+    /** @var bool */
+    private $condition = false;
     /** @var ?string */
     private $example;
     function __construct($name, $subtype = null) {
@@ -440,6 +442,9 @@ class String_Sitype extends Sitype {
             $this->simple = $this->allow_int = true;
         } else if ($subtype === "search") {
             $this->simple = true;
+            $this->example = "search expression";
+        } else if ($subtype === "condition") {
+            $this->simple = $this->condition = true;
             $this->example = "search expression";
         } else if ($subtype === "formula") {
             $this->simple = true;
@@ -466,10 +471,22 @@ class String_Sitype extends Sitype {
             return $jv ?? "";
         } else if (is_int($jv) && $this->allow_int) {
             return "{$jv}";
+        } else if (is_bool($jv) && $this->condition) {
+            return $jv ? "ALL" : "NONE";
         } else {
             $sv->error_at($si, $this->allow_int ? "<0>String or number required" : "<0>String required");
             return null;
         }
+    }
+    function unparse_jsonv($v, Si $si, SettingValues $sv) {
+        if ($this->condition) {
+            if ($v === "ALL") {
+                return true;
+            } else if ($v === "NONE") {
+                return false;
+            }
+        }
+        return $v;
     }
     function nullable($v, Si $si, SettingValues $sv) {
         return $v === ""
@@ -574,7 +591,7 @@ class Tag_Sitype extends Sitype {
         } else if (($t = $sv->tagger()->check($vstr, $this->flags))) {
             return $t;
         } else {
-            $sv->error_at($si, "<5>" . $sv->tagger()->error_html());
+            $sv->error_at($si, $sv->tagger()->error_ftext());
             return null;
         }
     }
@@ -585,16 +602,15 @@ class Tag_Sitype extends Sitype {
 
 class TagList_Sitype extends Sitype {
     use Data_Sitype;
-    /** @var int */
-    private $flags = Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE;
-    /** @var ?float */
-    private $min_idx;
+    /** @var int
+     * @readonly */
+    public $flags = Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE;
+    /** @var ?float
+     * @readonly */
+    public $min_idx;
     /** @param string $type
      * @param string $subtype */
     function __construct($type, $subtype) {
-        if ($subtype && str_starts_with($subtype, "wildcard")) { // XXX
-            $subtype = "allow_{$subtype}";
-        }
         if ($subtype === "allow_wildcard" || $subtype === "allow_wildcard_chair") {
             $this->flags |= Tagger::ALLOWSTAR;
         }
@@ -616,10 +632,13 @@ class TagList_Sitype extends Sitype {
                 }
                 $ts[strtolower($tag)] = $tx;
             } else if ($t !== "") {
-                $sv->error_at($si, "<5>" . $sv->tagger()->error_html(true));
+                $sv->error_at($si, $sv->tagger()->error_ftext(true));
             }
         }
-        ksort($ts);
+        $collator = $sv->conf->collator();
+        uksort($ts, function ($a, $b) use ($collator) {
+            return $collator->compare($a, $b);
+        });
         return join(" ", array_values($ts));
     }
     function json_examples(Si $si, SettingValues $sv) {

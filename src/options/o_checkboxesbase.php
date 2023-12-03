@@ -1,6 +1,6 @@
 <?php
 // o_checkboxesbase.php -- HotCRP helper class for checkboxes & topics options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 abstract class CheckboxesBase_PaperOption extends PaperOption {
     /** @var int */
@@ -12,13 +12,15 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
 
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
-        if (!isset($args->min) && $this->required) {
+        if (!isset($args->min) && $this->required > 0) {
             $this->min_count = 1;
         } else {
             $this->min_count = $args->min ?? 0;
         }
         $this->max_count = $args->max ?? 0;
-        $this->required = $this->min_count > 0;
+        if ($this->min_count > 0 && $this->required === 0) {
+            $this->set_required(self::REQ_SUBMIT);
+        }
     }
 
 
@@ -31,27 +33,34 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
         return [];
     }
 
-    function update_value_list(PaperValue $ov, PaperStatus $ps) {
+
+    function field_fmt_context() {
+        return [new FmtArg("min", $this->min_count), new FmtArg("max", $this->max_count)];
     }
 
 
     function value_check(PaperValue $ov, Contact $user) {
-        if ($this->test_exists($ov->prow)) {
-            if ($this->min_count > 0
-                && !$ov->prow->allow_absent()
-                && $ov->value_count() < $this->min_count) {
-                $ov->error($this->conf->_("<0>Select at least {0} values", $this->min_count, new FmtArg("id", $this->readable_formid())));
-            }
-            if ($this->max_count > 0
-                && $ov->value_count() > $this->max_count) {
-                $ov->error($this->conf->_("<0>Select at most {0} values", $this->max_count, new FmtArg("id", $this->readable_formid())));
-            }
+        if (!$this->test_exists($ov->prow)) {
+            return;
+        }
+        $n = $ov->value_count();
+        if ($ov->has_anno("new_values")) {
+            $n += count($ov->anno("new_values"));
+        }
+        if ($this->min_count > 0
+            && !$ov->prow->allow_absent()
+            && $n < $this->min_count) {
+            $ov->error($this->conf->_("<0>At least {min} selections required", new FmtArg("min", $this->min_count), new FmtArg("max", $this->max_count), new FmtArg("type", $this->type)));
+        }
+        if ($this->max_count > 0
+            && $n > $this->max_count) {
+            $ov->error($this->conf->_("<0>At most {max} selections allowed", new FmtArg("min", $this->min_count), new FmtArg("max", $this->max_count), new FmtArg("type", $this->type)));
         }
     }
 
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         $vs = $ov->value_list();
-        if (!empty($vs) && !$ps->export_ids()) {
+        if (!empty($vs) && !$pex->use_ids) {
             $tmap = $this->topic_set();
             $vs = array_map(function ($t) use ($tmap) { return $tmap[$t]; }, $vs);
         }
@@ -60,7 +69,7 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
 
     function value_store(PaperValue $ov, PaperStatus $ps) {
         if ($ov->has_anno("new_values") && count($ov->anno("new_values")) > 0) {
-            $this->update_value_list($ov, $ps);
+            $this->value_store_new_values($ov, $ps);
         }
 
         $vs = $ov->value_list();
@@ -69,8 +78,11 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
 
         $badvs = $ov->anno("bad_values") ?? [];
         if (!empty($badvs)) {
-            $ov->warning($ps->_("<0>Values %#s not found", $badvs, new FmtArg("id", $this->readable_formid())));
+            $ov->warning($ps->_("<0>Options {:list} not found", $badvs, new FmtArg("type", $this->type)));
         }
+    }
+
+    function value_store_new_values(PaperValue $ov, PaperStatus $ps) {
     }
 
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
@@ -78,6 +90,14 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
         foreach ($this->topic_set() as $tid => $tname) {
             $v = $qreq["{$this->formid}:{$tid}"] ?? "";
             if ($v !== "" && $v !== "0") {
+                $vs[] = $tid;
+            }
+        }
+        $v = $qreq[$this->formid] ?? "";
+        if ($v !== "" && $v !== "0" && ctype_digit($v)) {
+            $tid = intval($v);
+            if ($this->topic_set()->name($tid) !== null
+                && !in_array($tid, $vs)) {
                 $vs[] = $tid;
             }
         }
@@ -95,6 +115,8 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
             }));
         } else if ($j === false) {
             $j = [];
+        } else if (is_string($j)) {
+            $j = [$j];
         }
         if (!is_array($j) || $bad) {
             return PaperValue::make_estop($prow, $this, "<0>Validation error");
@@ -139,25 +161,47 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
         return $ov;
     }
 
+    /** @param FieldChangeSet $fcs */
+    function strip_unchanged_qreq(PaperInfo $prow, Qrequest $qreq, $fcs) {
+        if ($this->max_count !== 1) {
+            $basev = $prow->base_option($this);
+            foreach ($this->topic_set() as $tid => $tname) {
+                if ($fcs->test("{$this->formid}:{$tid}") === FieldChangeSet::UNCHANGED) {
+                    $qreq["{$this->formid}:{$tid}"] = in_array($tid, $basev->value_list()) ? "1" : "";
+                }
+            }
+        }
+    }
+
+    private function render_checkbox($tid, $checked, $arg) {
+        if ($this->max_count === 1) {
+            return Ht::radio($this->formid, $tid, $checked, $arg);
+        } else {
+            return Ht::checkbox("{$this->formid}:{$tid}", 1, $checked, $arg);
+        }
+    }
+
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         $pt->print_editable_option_papt($this, null, [
             "id" => $this->readable_formid(),
-            "context_args" => [$this->min_count, $this->max_count]
+            "for" => false,
         ]);
-        echo '<fieldset class="papev fieldset-covert" name="', $this->formid,
-            '"><ul class="ctable', $this->compact ? ' compact' : '', '">';
         $topicset = $this->topic_set();
-        $readonly = !$this->test_editable($ov->prow);
+        echo '<fieldset class="papev fieldset-covert" name="', $this->formid,
+            '"><ul class="ctable',
+            $this->compact ? ' compact' : '',
+            count($topicset) < 7 ? ' column-count-1' : '',
+            '">';
         foreach ($topicset->group_list() as $tg) {
             $arg = ["class" => "uic js-range-click topic-entry", "id" => false,
-                    "data-range-type" => $this->formid, "disabled" => $readonly];
+                    "data-range-type" => $this->formid];
             if (($isgroup = $tg->nontrivial())) {
                 echo '<li class="ctelt cteltg"><div class="ctelti">';
                 if ($tg->improper()) {
                     $arg["data-default-checked"] = in_array($tg->tid, $ov->value_list());
                     $checked = in_array($tg->tid, $reqov->value_list());
                     echo '<label class="checki cteltx"><span class="checkc">',
-                        Ht::checkbox("{$this->formid}:{$tg->tid}", 1, $checked, $arg),
+                        $this->render_checkbox($tg->tid, $checked, $arg),
                         '</span>', $topicset->unparse_name_html($tg->tid), '</label>';
                 } else {
                     echo '<div class="cteltx"><span class="topicg">',
@@ -175,13 +219,16 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
                 $checked = in_array($tid, $reqov->value_list());
                 echo ($isgroup ? '<label class="checki cteltx">' : '<li class="ctelt"><label class="checki ctelti">'),
                     '<span class="checkc">',
-                    Ht::checkbox("{$this->formid}:{$tid}", 1, $checked, $arg),
+                    $this->render_checkbox($tid, $checked, $arg),
                     '</span>', $tname, '</label>',
                     ($isgroup ? '' : '</li>');
             }
             if ($isgroup) {
                 echo '</div></div></li>';
             }
+        }
+        if ($topicset->count() === 0) {
+            echo '<li class="ctelt celtg"><div class="ctelti"><em>(No options defined)</em></div></li>';
         }
         echo "</ul></fieldset></div>\n\n";
     }
@@ -204,13 +251,20 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
                 if ($keyword !== null) {
                     $x = Ht::link($x, $this->conf->hoturl("search", ["q" => "{$keyword}:" . SearchWord::quote($tname)]), ["class" => "q"]);
                 }
-                $ts[] = $t . '">' . $x . '</li>';
+                $ts[] = "{$t}\">{$x}</li>";
                 $lenclass = TopicSet::max_topici_lenclass($lenclass, $tname);
             }
-            $fr->title = $this->title(count($ts));
-            $fr->set_html('<ul class="topict topict-' . $lenclass . '">' . join("", $ts) . '</ul>');
+            $fr->title = $this->title(new FmtArg("count", count($ts)));
+            $fr->set_html("<ul class=\"topict topict-{$lenclass}\">" . join("", $ts) . '</ul>');
             $fr->value_long = true;
         }
+    }
+
+    function export_setting() {
+        $sfs = parent::export_setting();
+        $sfs->min = $this->min_count;
+        $sfs->max = $this->max_count;
+        return $sfs;
     }
 
     function parse_search(SearchWord $sword, PaperSearch $srch) {

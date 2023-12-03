@@ -43,7 +43,7 @@ class Settings_Batch {
     /** @param bool $new
      * @return string */
     static function output(SettingValues $sv, $new) {
-        return json_encode($sv->all_json_choosev($new), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+        return json_encode($sv->all_jsonv(["new" => $new]), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
     }
 
     /** @return int */
@@ -80,7 +80,7 @@ class Settings_Batch {
         }
         $fb = $this->sv->full_feedback_text();
         if ($fb === "" && !$this->diff) {
-            if (empty($this->sv->updated_fields())) {
+            if (empty($this->sv->changed_keys())) {
                 $fb = "No changes\n";
             } else if ($this->dry_run) {
                 $fb = "No errors\n";

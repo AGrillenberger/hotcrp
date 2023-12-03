@@ -1,6 +1,6 @@
 <?php
 // saveusers.php -- HotCRP command-line user modification script
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -24,7 +24,7 @@ class SaveUsers_Batch {
     function __construct(Contact $user, $arg) {
         $this->conf = $user->conf;
         $this->ustatus = new UserStatus($user);
-        $this->ustatus->notify = isset($arg["notify"]) || !isset($arg["no-notify"]);
+        $this->ustatus->notify = isset($arg["notify"]) && !isset($arg["no-notify"]);
         $this->ustatus->no_create = isset($arg["no-create"]);
         $this->ustatus->no_modify = isset($arg["no-modify"]);
 
@@ -38,6 +38,11 @@ class SaveUsers_Batch {
             }
             if (isset($arg["user-name"])) {
                 $j->name = $arg["user-name"];
+            }
+            if (isset($arg["disable"])) {
+                $j->disabled = true;
+            } else if (isset($arg["enable"])) {
+                $j->disabled = false;
             }
             $this->jexpr[] = json_encode($j);
             $this->filename = "<user>";
@@ -94,7 +99,7 @@ class SaveUsers_Batch {
 
     function parse_csv($str) {
         $csv = new CsvParser(cleannl(convert_to_utf8($str)));
-        $csv->set_comment_chars("#%");
+        $csv->set_comment_start("###");
         $line = $csv->next_list();
         if ($line !== null && preg_grep('/\Aemail\z/i', $line)) {
             $csv->set_header($line);
@@ -132,27 +137,30 @@ class SaveUsers_Batch {
             "config: !",
             "help,h !",
             "user:,u: =EMAIL Create or modify user EMAIL.",
-            "roles:,r: Set roles (`-u` only).",
-            "user-name:,uname: Set user name (`-u` only).",
+            "roles:,r: Set roles for `-u` user.",
+            "user-name:,uname: Set name for `-u` user.",
+            "disable Disable `-u` user.",
+            "enable Enable `-u` user.",
             "expression[],expr[],e[] =JSON Create or modify users specified in JSON.",
-            "no-notify,no-email Do not send email notifications.",
-            "notify !",
+            "notify,N Send email notifications (default is no notifications).",
+            "no-notify,no-email !",
             "no-modify,create-only Only create new users, do not modify existing.",
             "no-create,modify-only Only modify existing users, do not create new."
         )->helpopt("help")
          ->description("Save HotCRP users as specified in JSON or CSV.
 Usage: php batch/saveusers.php [OPTION]... [JSONFILE | CSVFILE]
        php batch/saveusers.php [OPTION]... -e JSON [-e JSON]...
-       php batch/saveusers.php [OPTION]... -u EMAIL [--roles ROLES]")
+       php batch/saveusers.php [OPTION]... -u EMAIL [--roles ROLES]
+                               [--disable | --enable]")
          ->maxarg(1);
         $arg = $go->parse($argv);
 
         if ((!empty($arg["_"]) || isset($arg["expression"]))
             && isset($arg["user"])) {
-            throw new CommandLineException("`-u` and `-e/FILE` are mutually exclusive", $go);
-        } else if ((isset($arg["roles"]) || isset($arg["user-name"]))
+            throw new CommandLineException("`-u` and `-e`/`FILE` are mutually exclusive", $go);
+        } else if ((isset($arg["roles"]) || isset($arg["user-name"]) || isset($arg["disable"]) || isset($arg["enable"]))
                    && !isset($arg["user"])) {
-            throw new CommandLineException("`-u` required for `--roles/--user-name`", $go);
+            throw new CommandLineException("`-u` required for those options", $go);
         } else if (isset($arg["no-modify"]) && isset($arg["no-create"])) {
             throw new CommandLineException("`--no-modify --no-create` does nothing", $go);
         }

@@ -1,6 +1,6 @@
 <?php
 // pc_formulagraph.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
     /** @var Formula */
@@ -53,19 +53,19 @@ class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
         return $is_text ? $x : htmlspecialchars($x);
     }
 
-    static function expand($name, Contact $user, $xfj, $m) {
-        $formula = new Formula($m[1], Formula::ALLOW_INDEXED);
-        if (!$formula->check($user)) {
+    static function expand($name, XtParams $xtp, $xfj, $m) {
+        $formula = new Formula($m[2], Formula::ALLOW_INDEXED);
+        if (!$formula->check($xtp->user)) {
             foreach ($formula->message_list() as $mi) {
-                PaperColumn::column_error($user, $mi);
+                PaperColumn::column_error($xtp, $mi->with(["pos_offset" => strlen($m[1])]));
             }
             return null;
         } else if ($formula->result_format() !== Fexpr::FREVIEWFIELD) {
-            PaperColumn::column_error($user, "<0>Formula of type " . $formula->result_format_description() . " can’t be used in graphs, review field value expected");
+            PaperColumn::column_error($xtp, "<0>Formula of type " . $formula->result_format_description() . " can’t be used in graphs, review field value expected");
             return null;
         } else {
             $cj = (array) $xfj;
-            $cj["name"] = "graph(" . $m[1] . ")";
+            $cj["name"] = "graph(" . $m[2] . ")";
             $cj["formula"] = $formula;
             return [(object) $cj];
         }

@@ -1,6 +1,6 @@
 <?php
 // api_user.php -- HotCRP user-related API calls
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class User_API {
     static function whoami(Contact $user, Qrequest $qreq) {
@@ -17,9 +17,12 @@ class User_API {
         }
 
         $users = [];
+        $slice = Contact::SLICE_MINIMAL - Contact::SLICEBIT_COLLABORATORS
+            - Contact::SLICEBIT_COUNTRY - Contact::SLICEBIT_ORCID;
         if ($user->privChair || $user->can_view_pc()) {
             $roles = $user->is_manager() ? "" : " and roles!=0 and (roles&" . Contact::ROLE_PC . ")!=0";
-            $result = $user->conf->qe("select contactId, email, firstName, lastName, affiliation, collaborators, country, orcid from ContactInfo where email>=? and email<? and not disabled$roles order by email asc limit 2", $email, $email . "~");
+            $result = $user->conf->qe("select " . $user->conf->user_query_fields($slice) . " from ContactInfo where email>=? and email<? and (cflags&?)=0{$roles} order by email asc limit 2",
+                $email, "{$email}~", Contact::CFLAG_DISABLEMENT);
             while (($u = Contact::fetch($result, $user->conf))) {
                 $users[] = $u;
             }
@@ -29,12 +32,13 @@ class User_API {
         if ((empty($users) || strcasecmp($users[0]->email, $email) !== 0)
             && $user->conf->opt("allowLookupUser")) {
             if (($db = $user->conf->contactdb())) {
-                $idk = "contactDbId";
+                $fields = $user->conf->contactdb_user_query_fields($slice);
             } else {
                 $db = $user->conf->dblink;
-                $idk = "contactId";
+                $fields = $user->conf->user_query_fields($slice);
             }
-            $result = Dbl::qe($db, "select $idk, email, firstName, lastName, affiliation, collaborators, country, orcid from ContactInfo where email>=? and email<? and not disabled order by email asc limit 2", $email, $email . "~");
+            $result = Dbl::qe($db, "select {$fields} from ContactInfo where email>=? and email<? and (cflags&?)=0 order by email asc limit 2",
+                $email, "{$email}~", Contact::CFLAG_DISABLEMENT);
             $users = [];
             while (($u = Contact::fetch($result, $user->conf))) {
                 $users[] = $u;
@@ -44,7 +48,7 @@ class User_API {
 
         if (empty($users)
             && strcasecmp($user->email, $email) >= 0
-            && strcasecmp($user->email, $email . "~") < 0) {
+            && strcasecmp($user->email, "{$email}~") < 0) {
             $users[] = $user;
         }
 
@@ -111,7 +115,12 @@ class User_API {
             $ustatus = new UserStatus($viewer);
             $ustatus->set_user($user);
             if ($ustatus->save_user((object) ["disabled" => $disabled], $user)) {
-                return new JsonResult(["ok" => true, "u" => $user->email, "disabled" => $user->disablement !== 0]);
+                return new JsonResult([
+                    "ok" => true,
+                    "u" => $user->email,
+                    "disabled" => $user->is_disabled(),
+                    "placeholder" => $user->is_placeholder()
+                ]);
             } else {
                 return new JsonResult(["ok" => false, "u" => $user->email]);
             }
@@ -122,14 +131,21 @@ class User_API {
     static function account_sendinfo(Contact $user, Contact $viewer) {
         if (!$viewer->privChair) {
             return JsonResult::make_permission_error();
-        } else if ($user->disablement === 0) {
+        }
+        if ($user->activate_placeholder_prop(false)) {
+            $user->save_prop();
+        }
+        if (!$user->is_dormant()) {
             $user->send_mail("@accountinfo");
             return new JsonResult(["ok" => true, "u" => $user->email]);
+        } else if ($user->is_placeholder() && !$user->is_disabled()) {
+            $msg = "<0>This user has not yet activated their account";
         } else {
-            $j = MessageItem::make_error_json("<0>User disabled");
-            $j["u"] = $user->email;
-            return new JsonResult($j);
+            $msg = "<0>User disabled";
         }
+        $jr = JsonResult::make_error(400, $msg);
+        $jr->content["u"] = $user->email;
+        return $jr;
     }
 
     /** @return JsonResult */

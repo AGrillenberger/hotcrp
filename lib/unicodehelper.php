@@ -22,6 +22,8 @@ class UnicodeHelper {
     /** @var array<string,int> */
     private static $deaccent_map;
 
+    /** @param string $ins
+     * @param int $step */
     private static function add_deaccent_map($ins, $step) {
         $l = strlen($ins);
         $tag = $step === 3 ? 1 : 0;
@@ -39,8 +41,10 @@ class UnicodeHelper {
         }
     }
 
+    /** @param int $di
+     * @return string */
     private static function deaccent_result($di) {
-        if ($di & 1) {
+        if (($di & 1) !== 0) {
             return trim(substr(UTF8_ALPHA_TRANS_3_OUT, $di >> 1, 3));
         } else {
             return trim(substr(UTF8_ALPHA_TRANS_2_OUT, $di >> 1, 2));
@@ -70,8 +74,10 @@ class UnicodeHelper {
         return $x;
     }
 
+    /** @param string $x
+     * @return array{string,list<int>} */
     static function deaccent_offsets($x) {
-        $offsetmap = [[0, 0]];
+        $offsetmap = [0, 0];
         if (preg_match_all("/[\xC0-\xFF]/", $x, $m, PREG_OFFSET_CAPTURE)) {
             if (self::$deaccent_map === null) {
                 self::make_deaccent_map();
@@ -85,7 +91,8 @@ class UnicodeHelper {
                 if (($di = self::$deaccent_map[$ch] ?? null) !== null) {
                     $out .= substr($x, $first, $i - $first) . self::deaccent_result($di);
                     $first = $i + $l;
-                    $offsetmap[] = [strlen($out), $first];
+                    $offsetmap[] = strlen($out);
+                    $offsetmap[] = $first;
                 }
             }
             $x = $out . substr($x, $first);
@@ -93,11 +100,15 @@ class UnicodeHelper {
         return [$x, $offsetmap];
     }
 
+    /** @param list<int> $offsetmap
+     * @param int $offset
+     * @return int */
     static function deaccent_translate_offset($offsetmap, $offset) {
-        for ($i = 1; $i < count($offsetmap) && $offsetmap[$i][0] <= $offset; ++$i) {
+        $n = count($offsetmap);
+        for ($i = 2; $i < $n && $offsetmap[$i] <= $offset; $i += 2) {
             /* do nothing */;
         }
-        return $offsetmap[$i - 1][1] + ($offset - $offsetmap[$i - 1][0]);
+        return $offsetmap[$i - 1] + ($offset - $offsetmap[$i - 2]);
     }
 
     /** @param string $str
@@ -123,61 +134,108 @@ class UnicodeHelper {
     }
 
     /** @param string $str
-     * @return int|false */
-    static function utf8_ord($str) {
-        $n = ord($str[0]);
-        if ($n < 0x80) {
-            return $n;
-        } else if ($n < 0xC0) {
-            return false;
-        } else if ($n < 0xE0) {
-            $n &= 0x1F;
-            $need = 1;
-        } else if ($n < 0xF0) {
-            $n &= 0x0F;
-            $need = 2;
+     * @param int $pos
+     * @return string */
+    static function utf8_char_at($str, $pos) {
+        $len = strlen($str);
+        $ch = ord($str[$pos]);
+        if ($ch < 0x80) {
+            return $str[$pos];
+        } else if ($ch < 0xC2
+                   || $ch > 0xF4
+                   || $pos + 1 >= $len) {
+            return "";
+        }
+        $ch1 = ord($str[$pos + 1]);
+        if (($ch1 & 0xC0) !== 0x80
+            || ($ch === 0xE0 && $ch1 < 0xA0)  // overlong
+            || ($ch === 0xED && $ch1 >= 0xA0) // surrogate
+            || ($ch === 0xF0 && $ch1 < 0x90)  // overlong
+            || ($ch === 0xF4 && $ch1 >= 0x90)) { // invalid
+            return "";
+        } else if ($ch < 0xE0) {
+            return substr($str, $pos, 2);
+        } else if ($pos + 2 >= $len
+                   || (ord($str[$pos + 2]) & 0xC0) !== 0x80) {
+            return "";
+        } else if ($ch < 0xF0) {
+            return substr($str, $pos, 3);
+        } else if ($pos + 3 >= $len
+                   || (ord($str[$pos + 3]) & 0xC0) !== 0x80) {
+            return "";
         } else {
-            $n &= 0x07;
-            $need = 3;
+            return substr($str, $pos, 4);
         }
-        if (strlen($str) <= $need) {
-            return false;
-        }
-        for ($i = 1; $i <= $need; ++$i) {
-            $c = ord($str[$i]);
-            if ($c < 0x80 || $c >= 0xC0) {
-                return false;
-            }
-            $n = ($n << 6) | ($c & 0x3F);
-        }
-        return $n;
     }
 
-    /** @param int $n
+    /** @param string $str
+     * @return int */
+    static function utf8_ord($str, $pos = 0) {
+        $len = strlen($str);
+        $ch = ord($str[$pos]);
+        if ($ch < 0x80) {
+            return $ch;
+        } else if ($ch < 0xC2
+                   || $ch > 0xF4
+                   || $pos + 1 >= $len) {
+            return -1;
+        }
+        $ch1 = ord($str[$pos + 1]);
+        if (($ch1 & 0xC0) !== 0x80
+            || ($ch === 0xE0 && $ch1 < 0xA0)  // overlong
+            || ($ch === 0xED && $ch1 >= 0xA0) // surrogate
+            || ($ch === 0xF0 && $ch1 < 0x90)  // overlong
+            || ($ch === 0xF4 && $ch1 >= 0x90)) { // invalid
+            return -1;
+        } else if ($ch < 0xE0) {
+            return (($ch & 0x1F) << 6) | ($ch1 & 0x3F);
+        } else if ($pos + 2 >= $len
+                   || (($ch2 = ord($str[$pos + 2])) & 0xC0) !== 0x80) {
+            return -1;
+        } else if ($ch < 0xF0) {
+            return (($ch & 0x0F) << 12) | (($ch1 & 0x3F) << 6) | ($ch2 & 0x3F);
+        } else if ($pos + 3 >= $len
+                   || (($ch3 = ord($str[$pos + 3])) & 0xC0) !== 0x80) {
+            return -1;
+        } else {
+            return (($ch & 0x07) << 18) | (($ch1 & 0x3F) << 12)
+                | (($ch2 & 0x3F) << 6) | ($ch3 & 0x3F);
+        }
+    }
+
+    /** @param int $ch
      * @return list<int> */
-    static function utf16_seq($n) {
-        if ($n >= 0 && $n <= 0xFFFF) {
-            return [$n];
-        } else if ($n >= 0x10000 && $n <= 0x10FFFF) {
-            $n -= 0x10000;
-            return [0xD800 | ($n >> 10), 0xDC00 | ($n & 0x3FF)];
+    static function utf16_seq($ch) {
+        if ($ch >= 0 && $ch <= 0xFFFF) {
+            return [$ch];
+        } else if ($ch >= 0x10000 && $ch <= 0x10FFFF) {
+            $ch -= 0x10000;
+            return [0xD800 | ($ch >> 10), 0xDC00 | ($ch & 0x3FF)];
         } else {
             return [];
         }
     }
 
-    /** @param int $n
+    /** @param int $ch
      * @return string */
-    static function utf8_chr($n) {
-        if ($n < 0x80) {
-            return chr($n);
-        } else if ($n < 0x800) {
-            return chr(0xC0 | ($n >> 6)) . chr(0x80 | ($n & 0x3F));
-        } else if ($n < 0x10000) {
-            return chr(0xE0 | ($n >> 12)) . chr(0x80 | (($n >> 6) & 0x3F)) . chr(0x80 | ($n & 0x3F));
+    static function utf8_chr($ch) {
+        assert($ch >= 0 && $ch <= 0x10FFFF);
+        if ($ch < 0x80) {
+            return chr($ch);
+        } else if ($ch < 0x800) {
+            return chr(0xC0 | ($ch >> 6)) . chr(0x80 | ($ch & 0x3F));
+        } else if ($ch < 0x10000) {
+            return chr(0xE0 | ($ch >> 12)) . chr(0x80 | (($ch >> 6) & 0x3F)) . chr(0x80 | ($ch & 0x3F));
         } else {
-            return chr(0xF0 | ($n >> 18)) . chr(0x80 | (($n >> 12) & 0x3F)) . chr(0x80 | (($n >> 6) & 0x3F)) . chr(0x80 | ($n & 0x3F));
+            return chr(0xF0 | ($ch >> 18)) . chr(0x80 | (($ch >> 12) & 0x3F)) . chr(0x80 | (($ch >> 6) & 0x3F)) . chr(0x80 | ($ch & 0x3F));
         }
+    }
+
+    /** @param int $ch
+     * @return 1|2|3|4 */
+    static function utf8_chrlen($ch) {
+        assert($ch >= 0 && $ch <= 0x10FFFF);
+        return 1 + (int) ($ch >= 0x80) + (int) ($ch >= 0x800) + (int) ($ch >= 0x10000);
     }
 
     /** @param string $str
@@ -353,17 +411,22 @@ class UnicodeHelper {
         $c = $len ? ord($str[$len - 1]) : 0;
         if ($c < 0x80) {
             return $str;
-        } else if ($c >= 0xC0 || $len == 1
+        } else if ($c >= 0xC0
+                   || $len === 1
                    || ($d = ord($str[$len - 2])) < 0x80) {
             return substr($str, 0, $len - 1);
-        } else if ($d >= 0xC0 && $d < 0xE0) {
+        } else if ($d >= 0xC0
+                   && $d < 0xE0) {
             return $str;
-        } else if ($d >= 0xC0 || $len == 2
+        } else if ($d >= 0xC0
+                   || $len === 2
                    || ($e = ord($str[$len - 3])) < 0x80) {
             return substr($str, 0, $len - 2);
-        } else if ($e >= 0xE0 && $e < 0xF0) {
+        } else if ($e >= 0xE0
+                   && $e < 0xF0) {
             return $str;
-        } else if ($e >= 0xC0 || $len == 3
+        } else if ($e >= 0xC0
+                   || $len === 3
                    || ord($str[$len - 4]) < 0xF0) {
             return substr($str, 0, $len - 3);
         } else {

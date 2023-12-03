@@ -1,6 +1,6 @@
 <?php
 // o_title.php -- HotCRP helper class for title intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Title_PaperOption extends PaperOption {
     function __construct($conf, $args) {
@@ -16,12 +16,12 @@ class Title_PaperOption extends PaperOption {
             && (strlen($ov->data()) > 6
                 || !preg_match('/\A(?:|N\/?A|TB[AD])\z/i', $ov->data()));
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return (string) $ov->data();
     }
     function value_save(PaperValue $ov, PaperStatus $ps) {
         $ps->change_at($this);
-        $ps->save_paperf("title", $ov->data());
+        $ov->prow->set_prop("title", $ov->data());
         return true;
     }
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
@@ -36,5 +36,8 @@ class Title_PaperOption extends PaperOption {
     function render(FieldRender $fr, PaperValue $ov) {
         $fr->value = $ov->prow->title ? : "[No title]";
         $fr->value_format = $ov->prow->title_format();
+    }
+    function present_script_expression() {
+        return ["type" => "text_present", "formid" => $this->formid];
     }
 }

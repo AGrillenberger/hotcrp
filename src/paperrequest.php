@@ -1,6 +1,6 @@
 <?php
 // paperrequest.php -- HotCRP helper class for parsing paper requests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class PaperRequest {
     /** @var PaperInfo */
@@ -17,7 +17,8 @@ class PaperRequest {
         }
     }
 
-    /** @return PaperRequest|Redirection|PermissionProblem */
+    /** @param bool $review
+     * @return PaperRequest|Redirection|PermissionProblem */
     static function make(Qrequest $qreq, $review) {
         try {
             return new PaperRequest($qreq, $review);
@@ -28,6 +29,7 @@ class PaperRequest {
         }
     }
 
+    /** @return bool */
     static function simple_qreq(Qrequest $qreq) {
         return ($qreq->is_get() || $qreq->is_head())
             && !array_diff($qreq->keys(), ["p", "paperId", "m", "mode", "forceShow", "t", "q", "r", "reviewId", "cap", "actas", "accept", "decline"]);
@@ -126,7 +128,7 @@ class PaperRequest {
                 if (count($ps) === 1) {
                     // DISABLED: check if the paper is in the current list
                     $list = $search->session_list_object();
-                    $list->set_cookie($user);
+                    $list->set_cookie($qreq);
                     throw new Redirection($conf->selfurl($qreq, ["q" => null, "p" => $ps[0]]));
                 } else {
                     throw new Redirection($conf->hoturl("search", ["q" => $q, "t" => $qreq->t]));
@@ -149,7 +151,7 @@ class PaperRequest {
     private function signin_redirection($qreq, $pid) {
         $conf = $qreq->conf();
         return new PermissionProblem($conf, [
-            "signin" => true,
+            "signin" => $pid ? "paper" : "paper:start",
             "signinUrl" => $conf->hoturl_raw("signin", ["redirect" => $conf->selfurl($qreq, ["p" => $pid ? : "new"], Conf::HOTURL_SITEREL | Conf::HOTURL_RAW)]),
             "secondary" => true
         ]);
@@ -211,13 +213,16 @@ class PaperRequest {
         $user = $qreq->user();
         $pid = $this->find_pid($user->conf, $user, $qreq);
         if ($pid === 0) {
-            if ($user->has_email()) {
-                return PaperInfo::make_new($user, $qreq->sclass);
-            } else {
-                throw $this->signin_redirection($qreq, 0);
+            if (isset($qreq->sclass)
+                && !$user->conf->submission_round_by_tag($qreq->sclass)
+                // allow synonyms for unnamed submission round
+                && strcasecmp($qreq->sclass, "undefined") !== 0
+                && strcasecmp($qreq->sclass, "default") !== 0) {
+                throw new PermissionProblem($user->conf, ["invalidSclass" => $qreq->sclass]);
             }
+            return PaperInfo::make_new($user, $qreq->sclass);
         } else {
-            $options = ["topics" => true, "options" => true];
+            $options = ["topics" => true, "options" => true, "allConflictType" => true, "myWatch" => true];
             if ($user->privChair
                 || ($user->isPC && $user->conf->timePCReviewPreferences())) {
                 $options["reviewerPreference"] = true;

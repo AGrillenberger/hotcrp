@@ -1,6 +1,6 @@
 <?php
 // base.php -- HotCRP base helper functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 /** @phan-file-suppress PhanRedefineFunction */
 
 // type helpers
@@ -50,6 +50,12 @@ function is_string_list($x) {
     } else {
         return false;
     }
+}
+
+/** @return list */
+function make_array(...$x) {
+    // This works around a syntax error in PHP 7
+    return $x;
 }
 
 
@@ -257,10 +263,36 @@ function prefix_word_wrap($prefix, $text, $indent = 18, $width = 75, $flowed = f
 /** @param string $text
  * @return int */
 function count_words($text) {
-    return is_usascii($text)
-        ? preg_match_all('/[^-\s.,;:<>!?*_~`#|]\S*/', $text)
-        : preg_match_all('/[^-\s.,;:<>!?*_~`#|]\S*/u', $text);
+    $refl = is_usascii($text) ? 's' : 'us';
+    return preg_match_all('/[^-\s.,;:<>!?*_~`#|]\S*+/' . $refl, $text);
     // 2023 benchmark on 223MB: Without /u = 1.76, with /u = 2.52, with is_usascii = 2.40.
+}
+
+/** @param string $text
+ * @param int $wlimit
+ * @return array{string,string} */
+function count_words_split($text, $wlimit) {
+    // A compiled regex in PCRE takes space proportional to the maximum repeat
+    // count, so the previous version that more straightforwardly used a repeat
+    // count equal to $wlimit failed in practice. This version is faster than
+    // preg_match_all + join.
+    $refl = is_usascii($text) ? 's' : 'us';
+    $offset = 0;
+    $len = strlen($text);
+    while ($offset < $len && $wlimit > 0) {
+        $n = min($wlimit, 50);
+        if (!preg_match('/\G(?:[-\s.,;:<>!?*_~`#|]*+[^-\s.,;:<>!?*_~`#|]\S*+){' . $n . '}\s*+/' . $refl, $text, $m, 0, $offset)) {
+            return [$text, ""];
+        }
+        $offset += strlen($m[0]);
+        $wlimit -= $n;
+    }
+    if ($wlimit > 0
+        || preg_match('/\G[-\s.,;:<>!?*_~`#|]*+\z/' . $refl, $text, $m, 0, $offset)) {
+        return [$text, ""];
+    } else {
+        return [substr($text, 0, $offset), substr($text, $offset)];
+    }
 }
 
 /** @param string $s
@@ -499,19 +531,28 @@ function object_replace($a, $b) {
     }
 }
 
+const OBJECT_REPLACE_NO_RECURSE = "norecurse\000";
+
 /** @param object $a
  * @param array|object $b
  * @return void */
 function object_replace_recursive($a, $b) {
-    foreach (is_object($b) ? get_object_vars($b) : $b as $k => $v) {
-        if ($v === null) {
-            unset($a->$k);
-        } else if (!property_exists($a, $k)
-                   || !is_object($a->$k)
-                   || !is_object($v)) {
+    $ba = is_object($b) ? get_object_vars($b) : $b;
+    if ($ba[OBJECT_REPLACE_NO_RECURSE] ?? null) {
+        foreach (array_keys(get_object_vars($a)) as $ak) {
+            unset($a->$ak);
+        }
+    }
+    foreach ($ba as $k => $v) {
+        if (is_object($v) || is_associative_array($v)) {
+            if (!is_object($a->$k ?? null)) {
+                $a->$k = (object) [];
+            }
+            object_replace_recursive($a->$k, $v);
+        } else if ($v !== null && $k !== OBJECT_REPLACE_NO_RECURSE) {
             $a->$k = $v;
         } else {
-            object_replace_recursive($a->$k, $v);
+            unset($a->$k);
         }
     }
 }
@@ -520,11 +561,10 @@ function object_replace_recursive($a, $b) {
  * @param array|object $b
  * @return ?string */
 function json_object_replace_recursive($a, $b) {
-    $obj = $a ? json_decode($a) : (object) [];
-    if (is_object($obj)) {
-        object_replace_recursive($obj, $b);
-    }
-    $s = json_encode_db($obj ?? (object) []);
+    $ax = $a ? json_decode($a) : (object) [];
+    $ao = is_object($ax) ? $ax : (object) [];
+    object_replace_recursive($ao, $b);
+    $s = json_encode_db($ao);
     return $s !== "{}" ? $s : null;
 }
 
@@ -634,7 +674,7 @@ function tempdir($mode = 0700) {
         $dir = substr($dir, 0, -1);
     }
     for ($i = 0; $i !== 100; $i++) {
-        $path = $dir . "/hotcrptmp" . mt_rand(0, 9999999);
+        $path = sprintf("%s/hotcrptmp%07d", $dir, mt_rand(0, 9999999));
         if (mkdir($path, $mode)) {
             register_shutdown_function("rm_rf_tempdir", $path);
             return $path;

@@ -1,6 +1,6 @@
 <?php
 // api_requestreview.php -- HotCRP review-request API calls
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class RequestReview_API {
     /** @param Contact $user
@@ -11,7 +11,7 @@ class RequestReview_API {
         $round = null;
         if ((string) $qreq->round !== ""
             && ($rname = $user->conf->sanitize_round_name($qreq->round)) !== false) {
-            $round = (int) $user->conf->round_number($rname, false);
+            $round = (int) $user->conf->round_number($rname);
         }
 
         if (($whyNot = $user->perm_request_review($prow, $round, true))) {
@@ -163,7 +163,7 @@ class RequestReview_API {
         if (!$user->allow_administer($prow)) {
             return JsonResult::make_error(403, "<0>Only administrators can request anonymous reviews");
         }
-        $aset = new AssignmentSet($user, true);
+        $aset = (new AssignmentSet($user))->set_override_conflicts(true);
         $aset->enable_papers($prow);
         $aset->parse("paper,action,user\n{$prow->paperId},review,newanonymous\n");
         if ($aset->execute()) {
@@ -210,14 +210,16 @@ class RequestReview_API {
                 $request->reviewRound);
             Dbl::qx_raw("unlock tables");
 
-            $reviewer_contact = (object) [
+            $reviewer_contact = Author::make_keyed([
                 "firstName" => $reviewer ? $reviewer->firstName : $request->firstName,
                 "lastName" => $reviewer ? $reviewer->lastName : $request->lastName,
+                "affiliation" => $reviewer ? $reviewer->affiliation : $request->affiliation,
                 "email" => $email
-            ];
+            ]);
             HotCRPMailer::send_to($requester, "@denyreviewrequest", [
                 "prow" => $prow,
-                "reviewer_contact" => $reviewer_contact, "reason" => $reason
+                "reviewer_contact" => $reviewer_contact,
+                "reason" => $reason
             ]);
 
             $user->log_activity_for($requester, "Review proposal denied for $email", $prow);
@@ -313,7 +315,7 @@ class RequestReview_API {
             if ($rrow->requestedBy > 0
                 && ($requser = $user->conf->user_by_id($rrow->requestedBy))) {
                 HotCRPMailer::send_to($requser, "@acceptreviewrequest", [
-                    "prow" => $prow, "reviewer_contact" => $rrow
+                    "prow" => $prow, "reviewer_contact" => $rrow->reviewer()
                 ]);
             }
         }
@@ -379,7 +381,7 @@ class RequestReview_API {
         if ($rrow) {
             $prow->conf->qe("insert into PaperReviewRefused set paperId=?, email=?, contactId=?, requestedBy=?, timeRequested=?, refusedBy=?, timeRefused=?, reason=?, refusedReviewType=?, refusedReviewId=?, reviewRound=?, data=?
                 on duplicate key update reason=coalesce(?,reason)",
-                $prow->paperId, $rrow->email, $rrow->contactId,
+                $prow->paperId, $rrow->reviewer()->email, $rrow->contactId,
                 $rrow->requestedBy, $rrow->timeRequested,
                 $user->contactId, Conf::$now, $reason, $rrow->reviewType,
                 $rrid, $rrow->reviewRound, $rrow->data_string(),
@@ -401,7 +403,9 @@ class RequestReview_API {
             if ($rrow->requestedBy > 0
                 && ($requser = $user->conf->user_by_id($rrow->requestedBy))) {
                 HotCRPMailer::send_to($requser, "@declinereviewrequest", [
-                    "prow" => $prow, "reviewer_contact" => $rrow, "reason" => $reason
+                    "prow" => $prow,
+                    "reviewer_contact" => $rrow->reviewer(),
+                    "reason" => $reason
                 ]);
             }
 
@@ -506,7 +510,7 @@ class RequestReview_API {
         }
         $result = $user->conf->qe("select * from ReviewRequest where paperId=? and email=?",
             $prow->paperId, $email);
-        while (($req = ReviewRequestInfo::fetch($result))) {
+        while (($req = ReviewRequestInfo::fetch($result, $user->conf))) {
             $xrequests[] = $req;
         }
         Dbl::free($result);

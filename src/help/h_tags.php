@@ -40,8 +40,8 @@ case insensitive, so “#TAG” and “#tAg” are considered identical.</p>";
 
 <div class=\"pcard-left p c\" style=\"position:static;margin-bottom:1rem\">
 <div class=\"pspcard\"><div class=\"psc has-fold foldc\"><div class=\"pst ui js-foldup\">",
-    '<span class="psfn"><a href="" class="q ui js-foldup">',
-    expander(null, 0), "Tags</a></span></div><div class=\"psv\">",
+    '<span class="psfn"><button type="button" class="q ui js-foldup">',
+    expander(null, 0), "Tags</button></span></div><div class=\"psv\">",
     '<div class="fn">', $hth->search_link(null, "#earlyaccept", ["class" => "qo ibw"]), '</div>',
     '<div class="fx"><textarea cols="20" rows="4" name="tags" class="w-99 want-focus need-suggest tags">earlyaccept</textarea>',
     '<div class="aab flex-row-reverse mt-1"><div class="aabut">',
@@ -102,7 +102,7 @@ assignments using ", $hth->hotlink("bulk assignment", "bulkassign"), ".</p></li>
 
 <p>Although any PC member can view or search
 most tags, certain tags may be changed only by administrators",
-          $this->hth->current_tag_list("chair"), ".",
+          $this->hth->tag_settings_having_note(TagInfo::TF_READONLY), ".",
           $this->hth->change_setting_link("tag_readonly"), "</p>";
     }
 
@@ -186,15 +186,15 @@ high-ranked paper, but it’s usually better to trust the PC.)</p>\n";
     }
 
     function print_example_allotment() {
-        $vt = $this->hth->example_tag("allotment");
+        $vt = $this->hth->example_tag(TagInfo::TF_ALLOTMENT) ?? "vote";
         echo "<p><strong>Vote for papers.</strong>
- The chair can define tags used for allotment voting", $this->hth->current_tag_list("allotment"), ".",
+ The chair can define tags used for allotment voting", $this->hth->tag_settings_having_note(TagInfo::TF_ALLOTMENT), ".",
             $this->hth->change_setting_link("tag_vote_allotment"),
             " Each PC member is assigned an allotment of votes to distribute among papers.
  For instance, if “#{$vt}” were a voting tag with an allotment of 10, then a PC member could assign 5 votes to a paper by adding the twiddle tag “#~{$vt}#5”.
  The system automatically sums PC members’ votes into the public “#{$vt}” tag.
  To search for papers by vote count, search for “", $this->hth->search_link("rorder:#$vt"),
-    "”. (", $this->hth->help_link("votetags"), ")</p>\n";
+    "”. (", $this->hth->help_link("voting"), ")</p>\n";
     }
 
     function print_example_rank() {

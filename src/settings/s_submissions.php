@@ -4,13 +4,12 @@
 
 class Submissions_SettingParser extends SettingParser {
     static function print_open(SettingValues $sv) {
-        $sv->print_checkbox("submission_open", '<b>Open site for submissions</b>');
+        $sv->print_checkbox("submission_open", '<strong>Open site for submissions</strong>');
     }
     static function print_deadlines(SettingValues $sv) {
         // maybe sub_reg was overridden
-        if (($sub_reg = $sv->conf->setting("__sub_reg")) !== null) {
-            $sv->set_oldv("submission_registration", $sub_reg);
-        } else if ($sv->oldv("submission_registration") === $sv->oldv("submission_done")) {
+        $main_sr = $sv->conf->unnamed_submission_round();
+        if ($main_sr->inferred_register || $main_sr->register === $main_sr->submit) {
             $sv->set_oldv("submission_registration", null);
         }
         $sv->print_entry_group("submission_registration", "Registration deadline", null, "New submissions can be started until this deadline.");
@@ -31,7 +30,9 @@ class Submissions_SettingParser extends SettingParser {
             '<strong>Submission anonymity:</strong> Are author names hidden from reviewers?');
     }
     static function print_pcseeall(SettingValues $sv) {
-        $sv->print_checkbox("draft_submission_early_visibility", "PC can view incomplete submissions before submission deadline", null, "Check this box to collect review preferences before the submission deadline. After the submission deadline, PC members can only see completed submissions.");
+        $sv->print_checkbox("draft_submission_early_visibility", "PC can view incomplete submissions before submission deadline",[
+            "hint" => "Check this box to collect review preferences before the submission deadline. After the submission deadline, PC members can only see completed submissions."
+        ]);
     }
     static function print_pcseeallpdf(SettingValues $sv) {
         $sv->print_checkbox("submitted_document_early_visibility", "PC can view submitted PDFs before submission deadline");
@@ -51,7 +52,8 @@ class Submissions_SettingParser extends SettingParser {
         if ($sv->has_interest("submission_open")
             && $sv->oldv("submission_freeze") == 0
             && $sv->oldv("submission_open") > 0
-            && $sv->oldv("submission_done") <= 0)
+            && $sv->oldv("submission_done") <= 0) {
             $sv->warning_at(null, "<5>Authors can update their submissions until the deadline, but there is no deadline. This is sometimes unintentional. You may want to either (1) specify a " . $sv->setting_link("submission deadline", "submission_done") . ", (2) select “" . $sv->setting_link("Authors must freeze the final version of each submission", "submission_freeze") . "”, or (3) manually turn off “" . $sv->setting_link("Open site for submissions", "submission_open") . "” at the proper time.");
+        }
     }
 }

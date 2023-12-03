@@ -1,6 +1,6 @@
 <?php
 // settings/s_track.php -- HotCRP settings > tracks page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Track_Setting {
     /** @var string */
@@ -207,7 +207,7 @@ class Track_SettingParser extends SettingParser {
             '<div class="entry">',
             Ht::select("{$pfx}/type", $permts, $reqtype, $sv->sjs("{$pfx}/type", ["class" => "uich js-foldup"])),
             " &nbsp;",
-            Ht::entry("{$pfx}/tag", $reqtag, $sv->sjs("{$pfx}/tag", ["class" => "fx need-suggest pc-tags"]));
+            Ht::entry("{$pfx}/tag", $reqtag, $sv->sjs("{$pfx}/tag", ["class" => "fx need-suggest pc-tags", "spellcheck" => false, "autocomplete" => "off"]));
         $sv->print_feedback_at($pfx);
         $sv->print_feedback_at("{$pfx}/type");
         $sv->print_feedback_at("{$pfx}/tag");
@@ -237,7 +237,7 @@ class Track_SettingParser extends SettingParser {
         $this->ctr = $ctr;
         $this->nfolded = 0;
         $trx = $sv->oldv("track/{$ctr}");
-        echo '<div id="track/', $ctr, '" class="mg has-fold ',
+        echo '<div id="track/', $ctr, '" class="has-fold ',
             $trx->is_new ? "fold3o" : "fold3c", '">',
             Ht::hidden("track/{$ctr}/id", $trx->tag,
                 ["data-default-value" => $trx->is_new ? "" : null]),
@@ -246,7 +246,7 @@ class Track_SettingParser extends SettingParser {
             echo "For submissions not on other tracks:";
         } else {
             echo $sv->label("track/{$ctr}/tag", "For submissions with tag", ["class" => "mr-2"]),
-                $sv->entry("track/{$ctr}/tag", ["class" => "settings-track-name need-suggest tags", "spellcheck" => false]),
+                $sv->entry("track/{$ctr}/tag", ["class" => "settings-track-name need-suggest tags", "spellcheck" => false, "autocomplete" => "off"]),
                 ':';
         }
         echo '</div>';
@@ -255,11 +255,11 @@ class Track_SettingParser extends SettingParser {
 
         if ($this->nfolded) {
             echo '<div class="entryi wide fn3">',
-                '<label><a href="" class="ui js-foldup q" data-fold-target="3">',
-                expander(true, 3), 'More…</a></label>',
-                '<div class="entry"><a href="" class="ui js-foldup q" data-fold-target="3">',
-                $sv->conf->_("(%d more permissions have default values)", $this->nfolded),
-                '</a></div></div>';
+                '<label><button type="button" class="q ui js-foldup" data-fold-target="3">',
+                expander(true, 3), 'More…</button></label>',
+                '<div class="entry"><button type="button" class="q ui js-foldup" data-fold-target="3">',
+                $sv->conf->_("({} more permissions have default values)", $this->nfolded),
+                '</button></div></div>';
         }
         echo "</div></div>\n\n";
     }
@@ -335,7 +335,7 @@ class Track_SettingParser extends SettingParser {
             if (($t = $sv->tagger()->check($tag, Tagger::NOVALUE | Tagger::NOPRIVATE))) {
                 $pv = $type . $t;
             } else {
-                $sv->error_at($pfx, "<5>" . $sv->tagger()->error_html());
+                $sv->error_at($pfx, $sv->tagger()->error_ftext());
                 $sv->error_at("{$pfx}/tag");
                 return;
             }
@@ -435,5 +435,3 @@ class Track_SettingParser extends SettingParser {
         }
     }
 }
-
-class_alias("Track_SettingParser", "Tracks_SettingParser"); // XXX

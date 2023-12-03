@@ -34,8 +34,8 @@ class HelpRenderer extends Ht {
             if (str_ends_with($id, "-")) {
                 $id = substr($id, 0, strlen($id) - 1);
             }
-            if (preg_match('/\A(?:htctl.*|fold.*|body.*|tracker.*|msg.*|header.*|quicklink.*|tla.*|-|)\z/', $id)) {
-                $id = ($id === "" || $id === "-" ? null : "h-$id");
+            if (preg_match('/\A(?:fold.*|-.*|[a-z]-.*|)\z/', $id)) {
+                $id = ($id === "" || $id === "-" ? null : "heading-{$id}");
             }
             if ($id) {
                 $n = "";
@@ -45,13 +45,13 @@ class HelpRenderer extends Ht {
                 $id .= $n;
             }
         }
-        if ($id || $title) {
-            if ($id) {
-                $this->_h3ids[$id] = true;
-            }
-            return '<h3 class="helppage"' . ($id ? " id=\"{$id}\"" : "") . '>' . $title . "</h3>\n";
-        } else {
+        if (!$id && !$title) {
             return "";
+        } else if ($id) {
+            $this->_h3ids[$id] = true;
+            return "<h3 class=\"helppage\" id=\"{$id}\">{$title}</h3>\n";
+        } else {
+            return "<h3 class=\"helppage\">{$title}</h3>\n";
         }
     }
 
@@ -60,7 +60,7 @@ class HelpRenderer extends Ht {
     function table($tabletype = false) {
         $this->_rowidx = 0;
         $this->_tabletype = $tabletype;
-        return $this->_tabletype ? "" : '<table class="demargin"><tbody>';
+        return $this->_tabletype ? "" : '<table class="sentry-demargin"><tbody>';
     }
 
     /** @param string $title
@@ -71,7 +71,7 @@ class HelpRenderer extends Ht {
         if ($this->_tabletype) {
             return $this->subhead($title, $id);
         } else {
-            return '<tr><td class="sentry nw remargin-left remargin-right" colspan="2"><h4 class="helppage"'
+            return '<tr><td class="sentry nw" colspan="2"><h4 class="helppage"'
                 . ($id ? " id=\"{$id}\"" : "") . '>'
                 . $title . "</h4></td></tr>\n";
         }
@@ -89,11 +89,11 @@ class HelpRenderer extends Ht {
                 . "</td><td class=\"helplist-dd remargin-right\">"
                 . $entry . "</td></tr></tbody></table></div>\n";
         } else {
-            $t = '<tr class="k' . $this->_rowidx . '"><td class="sentry remargin-left';
+            $t = '<tr class="k' . $this->_rowidx . '"><td class="sentry';
             if ((string) $entry === "") {
-                $t .= ' remargin-right" colspan="2">' . $caption;
+                $t .= '" colspan="2">' . $caption;
             } else {
-                $t .= '">' . $caption . '</td><td class="sentry remargin-right">' . $entry;
+                $t .= '">' . $caption . '</td><td class="sentry">' . $entry;
             }
             $t .= "</td></tr>\n";
         }
@@ -222,29 +222,41 @@ class HelpRenderer extends Ht {
         return $this->trow($this->search_form($q, 36), $entry);
     }
 
-    /** @param string $property
-     * @return string */
-    function example_tag($property) {
-        $vt = [];
+    /** @param int $flags
+     * @return ?string */
+    function example_tag($flags) {
         if ($this->user->isPC) {
-            $vt = $this->conf->tags()->filter($property);
+            foreach ($this->conf->tags()->settings_having($flags) as $dt) {
+                if ($this->user->can_view_some_tag($dt->tag))
+                    return $dt->tag;
+            }
         }
-        return empty($vt) ? $property : current($vt)->tag;
+        return null;
     }
 
-    /** @param string $property
-     * @return string */
-    function current_tag_list($property) {
-        $vt = [];
+    /** @param int $flags
+     * @return list<string> */
+    function tag_settings_having($flags) {
+        $ts = [];
         if ($this->user->isPC) {
-            $vt = $this->conf->tags()->filter($property);
+            foreach ($this->conf->tags()->sorted_settings_having($flags) as $dt) {
+                if ($this->user->can_view_some_tag($dt->tag))
+                    $ts[] = $dt->tag;
+            }
         }
-        if (empty($vt)) {
+        return $ts;
+    }
+
+    /** @param int $flags
+     * @return string */
+    function tag_settings_having_note($flags) {
+        $ts = $this->tag_settings_having($flags);
+        if (empty($ts)) {
             return "";
         } else {
             return " (currently " . join(", ", array_map(function ($t) {
-                return $this->search_link($t->tag, "#{$t->tag}");
-            }, $vt)) . ")";
+                return $this->search_link($t, "#{$t}");
+            }, $ts)) . ")";
         }
     }
 

@@ -46,12 +46,27 @@ class Banal_SettingParser extends SettingParser {
             Ht::hidden("format/{$ctr}/id", $id);
         $sv->print_checkbox("format/{$ctr}/active", "PDF format checker<span class=\"fx\">:</span>", ["class" => "uich js-foldup", "group_class" => "form-g has-fold " . ($open ? "foldo" : "foldc"), "group_open" => true]);
         echo '<div class="f-mcol mt-3 fx"><div class="flex-grow-0">';
-        $sv->print_entry_group("format/{$ctr}/papersize", "Paper size", ["horizontal" => true, "readonly" => !$editable], "Examples: “letter”, <span class=\"nw\">“21cm x 28cm”,</span> <span class=\"nw\">“letter OR A4”</span>");
-        $sv->print_entry_group("format/{$ctr}/textblock", "Text block", ["horizontal" => true, "readonly" => !$editable], "Examples: “6.5in&nbsp;x&nbsp;9in”, “1in&nbsp;margins”");
-        $sv->print_entry_group("format/{$ctr}/columns", "Columns", ["horizontal" => true, "readonly" => !$editable]);
+        $sv->print_entry_group("format/{$ctr}/papersize", "Paper size", [
+            "horizontal" => true,
+            "readonly" => !$editable,
+            "hint" => "Examples: “letter”, <span class=\"nw\">“21cm x 28cm”,</span> <span class=\"nw\">“letter OR A4”</span>"
+        ]);
+        $sv->print_entry_group("format/{$ctr}/textblock", "Text block", [
+            "horizontal" => true,
+            "readonly" => !$editable,
+            "hint" => "Examples: “6.5in&nbsp;x&nbsp;9in”, “1in&nbsp;margins”"
+        ]);
+        $sv->print_entry_group("format/{$ctr}/columns", "Columns", [
+            "horizontal" => true,
+            "readonly" => !$editable
+        ]);
         echo '</div>';
         echo '<div class="flex-grow-0">';
-        $sv->print_entry_group("format/{$ctr}/pagelimit", "Page limit", ["horizontal" => true, "class" => "uii uich js-settings-banal-pagelimit", "readonly" => !$editable]);
+        $sv->print_entry_group("format/{$ctr}/pagelimit", "Page limit", [
+            "horizontal" => true,
+            "class" => "uii uich js-settings-banal-pagelimit",
+            "readonly" => !$editable
+        ]);
         echo '<div class="entryi fx2"><label></label><div class="entry settings-banal-unlimitedref">';
         $sv->print_checkbox("format/{$ctr}/unlimitedref", "Unlimited reference pages", ["disabled" => !$uropen || !$editable, "label_class" => $uropen ? null : "dim"]);
         echo '</div></div>';
@@ -90,11 +105,12 @@ class Banal_SettingParser extends SettingParser {
     static private function check_banal($sv) {
         $cf = new CheckFormat($sv->conf);
         $interesting_keys = ["papersize", "pagelimit", "textblock", "bodyfontsize", "bodylineheight"];
-        $cf->check_file(SiteLoader::find("etc/sample.pdf"), "letter;2;;6.5inx9in;12;14");
+        $doc = DocumentInfo::make_file(SiteLoader::find("etc/sample.pdf"), $sv->conf);
+        $cf->check_document($doc, "letter;2;;6.5inx9in;12;14");
         $s1 = self::cf_status($cf);
         $e1 = join(",", array_intersect($cf->problem_fields(), $interesting_keys)) ? : "none";
         $e1_papersize = $cf->has_problem_at("papersize");
-        $cf->check_file(SiteLoader::find("etc/sample.pdf"), "a4;1;;3inx3in;14;15");
+        $cf->check_document($doc, "a4;1;;3inx3in;14;15");
         $s2 = self::cf_status($cf);
         $e2 = join(",", array_intersect($cf->problem_fields(), $interesting_keys)) ? : "none";
         $want_e2 = join(",", $interesting_keys);
@@ -173,7 +189,7 @@ class Banal_SettingParser extends SettingParser {
             $cfs->pagelimit = null;
             $s = trim($sv->reqstr("format/{$ctr}/pagelimit"));
             if (!self::is_any_str($s)) {
-                if (($sx = cvtint($s, -1)) > 0) {
+                if (($sx = stoi($s) ?? -1) > 0) {
                     $cfs->pagelimit = [0, $sx];
                 } else if (preg_match('/\A(\d+)\s*(?:-|–)\s*(\d+)\z/', $s, $m)
                            && $m[1] > 0 && $m[2] > 0 && $m[1] <= $m[2]) {
@@ -196,7 +212,7 @@ class Banal_SettingParser extends SettingParser {
             $cfs->wordlimit = null;
             $s = trim($sv->reqstr("format/{$ctr}/wordlimit"));
             if (!self::is_any_str($s)) {
-                if (($sx = cvtint($s, -1)) >= 0) {
+                if (($sx = stoi($s) ?? -1) >= 0) {
                     $cfs->wordlimit = [0, $sx];
                 } else if (preg_match('/\A(\d+)\s*(?:-|–)\s*(\d+)\z/', $s, $m)
                            && $m[1] > 0 && $m[2] > 0 && $m[1] <= $m[2]) {
@@ -212,7 +228,7 @@ class Banal_SettingParser extends SettingParser {
             $cfs->columns = 0;
             $s = trim($sv->reqstr("format/{$ctr}/columns"));
             if (!self::is_any_str($s)) {
-                if (($sx = cvtint($s, -1)) >= 0) {
+                if (($sx = stoi($s) ?? -1) >= 0) {
                     $cfs->columns = $sx;
                 } else {
                     $sv->error_at("format/{$ctr}/columns", "<0>Requires a whole number");

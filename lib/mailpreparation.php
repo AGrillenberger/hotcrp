@@ -1,6 +1,6 @@
 <?php
 // mailpreparation.php -- HotCRP prepared mail
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class MailPreparation implements JsonSerializable {
     /** @var Conf */
@@ -33,7 +33,7 @@ class MailPreparation implements JsonSerializable {
     public $finalized = false;
 
     /** @param Conf $conf
-     * @param Contact|Author $recipient */
+     * @param ?Contact $recipient */
     function __construct($conf, $recipient) {
         $this->conf = $conf;
         if ($recipient) {
@@ -57,13 +57,13 @@ class MailPreparation implements JsonSerializable {
     /** @param MailPreparation $p
      * @return bool */
     function can_merge($p) {
-        return $this->subject === $p->subject
+        return !$this->unique_preparation
+            && !$p->unique_preparation
+            && $this->subject === $p->subject
             && $this->body === $p->body
             && ($this->headers["cc"] ?? null) == ($p->headers["cc"] ?? null)
             && ($this->headers["reply-to"] ?? null) == ($p->headers["reply-to"] ?? null)
             && $this->preparation_owner === $p->preparation_owner
-            && !$this->unique_preparation
-            && !$p->unique_preparation
             && empty($this->errors)
             && empty($p->errors);
     }
@@ -190,7 +190,6 @@ class MailPreparation implements JsonSerializable {
 
     #[\ReturnTypeWillChange]
     function jsonSerialize() {
-        $j = [];
         $h = ["headers"];
         if (!isset($this->headers["to"])) {
             $h[] = "to";
@@ -198,6 +197,7 @@ class MailPreparation implements JsonSerializable {
         if (!isset($this->headers["subject"])) {
             $h[] = "subject";
         }
+        $j = [];
         foreach (array_merge($h, ["body", "sensitive", "errors", "unique_preparation", "reset_capability", "landmark"]) as $k) {
             if (!empty($this->$k))
                 $j[$k] = $this->$k;

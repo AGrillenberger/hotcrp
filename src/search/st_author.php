@@ -75,12 +75,24 @@ class Author_SearchTerm extends SearchTerm {
         }
         return $this->csm->test($n);
     }
-    function configure_search($top, PaperSearch $srch) {
-        if ($this->regex) {
+    function prepare_visit($param, PaperSearch $srch) {
+        if ($param->want_field_highlighter() && $this->regex) {
             $srch->add_field_highlighter("au", $this->regex);
         }
     }
-    function about_reviews() {
-        return self::ABOUT_NO;
+    function script_expression(PaperInfo $row, $about) {
+        if ($this->csm->has_contacts()
+            || $this->regex
+            || $about !== self::ABOUT_PAPER) {
+            return $this->test($row, null);
+        } else {
+            return ["type" => "compar", "compar" => $this->csm->relation(), "child" => [
+                ["type" => "author_count"],
+                $this->csm->value()
+            ]];
+        }
+    }
+    function about() {
+        return self::ABOUT_PAPER;
     }
 }

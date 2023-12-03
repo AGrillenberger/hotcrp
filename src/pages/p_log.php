@@ -1,6 +1,6 @@
 <?php
 // pages/p_log.php -- HotCRP action log page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Log_Page {
     /** @var Conf */
@@ -21,6 +21,8 @@ class Log_Page {
     private $include_pids;
     /** @var ?array<int,mixed> */
     private $exclude_pids;
+    /** @var bool */
+    private $unix_timestamp;
     /** @var string */
     private $document_regexp;
     /** @var MessageSet */
@@ -37,6 +39,7 @@ class Log_Page {
                 $x[] = $opt->json_key();
         }
         $this->document_regexp = join("|", $x);
+        $this->unix_timestamp = $qreq->time === "u";
     }
 
 
@@ -52,9 +55,9 @@ class Log_Page {
         if (!empty($pids)) {
             $w = [];
             foreach ($pids as $p) {
-                $w[] = "paperId=$p";
-                $w[] = "action like '%(papers% $p,%'";
-                $w[] = "action like '%(papers% $p)%'";
+                $w[] = "paperId={$p}";
+                $w[] = "action like '%(papers% {$p},%'";
+                $w[] = "action like '%(papers% {$p})%'";
             }
             $this->lef_clauses[] = "(" . join(" or ", $w) . ")";
             $this->include_pids = array_flip($pids);
@@ -84,8 +87,8 @@ class Log_Page {
         if (!empty($ids)) {
             $result = $this->conf->qe("select contactId, email from ContactInfo where contactId?a union select contactId, email from DeletedContactInfo where contactId?a", $ids, $ids);
             while (($row = $result->fetch_row())) {
-                $w[] = "contactId=$row[0]";
-                $w[] = "destContactId=$row[0]";
+                $w[] = "contactId={$row[0]}";
+                $w[] = "destContactId={$row[0]}";
                 $x = sqlq(Dbl::escape_like($row[1]));
                 $w[] = "action like " . Dbl::utf8ci("'% {$x}%'");
             }
@@ -177,7 +180,7 @@ class Log_Page {
                 ++$page;
             }
         } else if ($this->qreq->offset
-                   && ($delta = cvtint($this->qreq->offset)) >= 0
+                   && ($delta = stoi($this->qreq->offset) ?? -1) >= 0
                    && $delta < $leg->page_size()) {
             $leg->set_page_delta($delta);
         }
@@ -191,7 +194,7 @@ class Log_Page {
         assert(Contact::ROLE_PC === 1 && Contact::ROLE_ADMIN === 2 && Contact::ROLE_CHAIR === 4);
         $role_map = ["", "pc", "sysadmin", "pc sysadmin", "chair", "chair", "chair", "chair"];
 
-        $csvg = $this->conf->make_csvg("log");
+        $csvg = $this->conf->make_csvg("log")->set_will_emit(true);
         $narrow = true;
         $headers = ["date", "ipaddr", "email"];
         if ($narrow) {
@@ -199,8 +202,9 @@ class Log_Page {
         }
         array_push($headers, "affected_email", "via", $narrow ? "paper" : "papers", "action");
         $csvg->select($headers);
+        set_time_limit(300); // might take a while
         foreach ($leg->page_rows(1) as $row) {
-            $date = date("Y-m-d H:i:s e", (int) $row->timestamp);
+            $date = date("Y-m-d H:i:s O", (int) $row->timestamp);
             $xusers = $leg->users_for($row, "contactId");
             $xdest_users = $leg->users_for($row, "destContactId");
             if ($xdest_users == $xusers) {
@@ -271,7 +275,7 @@ class Log_Page {
             $dplaceholder = $this->conf->unparse_time_log((int) $this->first_timestamp);
         }
 
-        echo Ht::form($this->conf->hoturl("log"), ["method" => "get", "id" => "searchform", "class" => "clearfix"]);
+        echo Ht::form($this->conf->hoturl("log"), ["method" => "get", "id" => "f-search", "class" => "mx-auto clearfix"]);
         if ($this->qreq->forceShow) {
             echo Ht::hidden("forceShow", 1);
         }
@@ -283,15 +287,15 @@ class Log_Page {
             '</div></div><div class="', $this->ms->control_class("p", "entryi medium"),
             '"><label for="p">Concerning paper(s)</label><div class="entry">',
             $this->ms->feedback_html_at("p"),
-            Ht::entry("p", $this->qreq->p, ["id" => "p", "class" => "need-suggest papersearch", "autocomplete" => "off", "size" => 40, "spellcheck" => false]),
+            Ht::entry("p", $this->qreq->p, ["id" => "p", "class" => "need-suggest papersearch", "size" => 40, "spellcheck" => false]),
             '</div></div><div class="', $this->ms->control_class("u", "entryi medium"),
             '"><label for="u">Concerning user(s)</label><div class="entry">',
             $this->ms->feedback_html_at("u"),
             Ht::entry("u", $this->qreq->u, ["id" => "u", "size" => 40]),
             '</div></div><div class="', $this->ms->control_class("n", "entryi medium"),
             '"><label for="n">Show</label><div class="entry">',
-            Ht::entry("n", $this->qreq->n, ["id" => "n", "size" => 4, "placeholder" => 50]),
-            '  records at a time',
+            Ht::entry("n", $this->ms->has_message_at("n") ? $this->qreq->n : ($leg->page_size() === 50 ? "" : $leg->page_size()), ["id" => "n", "size" => 4, "placeholder" => 50]),
+            ' records at a time',
             $this->ms->feedback_html_at("n"),
             '</div></div><div class="', $this->ms->control_class("date", "entryi medium"),
             '"><label for="date">Starting at</label><div class="entry">',
@@ -349,7 +353,7 @@ class Log_Page {
         if (($pc = $this->conf->pc_member_by_id($user->contactId))) {
             $user = $pc;
         }
-        if ($user->disablement & Contact::DISABLEMENT_DELETED) {
+        if ($user->disabled_flags() & Contact::CFLAG_DELETED) {
             $t = '<del>' . $user->name_h(NAME_E) . '</del>';
         } else {
             $t = $user->name_h(NAME_P);
@@ -363,7 +367,7 @@ class Log_Page {
         }
         $url = $this->conf->hoturl("log", ["q" => "", "u" => $user->email, "n" => $this->qreq->n]);
         $t = "<a href=\"{$url}\">{$t}</a>";
-        if ($dt && $dt->has_decoration) {
+        if ($dt && $dt->has(TagInfo::TFM_DECORATION)) {
             $tagger = new Tagger($this->viewer);
             $t .= $tagger->unparse_decoration_html($viewable, Tagger::DECOR_USER);
         }
@@ -399,7 +403,7 @@ class Log_Page {
                 && (!isset($user->roles) || !($user->roles & Contact::ROLE_PCLIKE))) {
                 $all_pc = false;
             }
-            if ($user->disablement & Contact::DISABLEMENT_DELETED) {
+            if ($user->disabled_flags() & Contact::CFLAG_DELETED) {
                 if ($user->email) {
                     $t = '<del>' . $user->name_h(NAME_E) . '</del>';
                 } else {
@@ -429,12 +433,12 @@ class Log_Page {
             return join(", ", $ts);
         } else {
             $fmt = $all_pc ? "%d PC users" : "%d users";
-            return '<div class="has-fold foldc"><a href="" class="ui js-foldup">'
+            return '<div class="has-fold foldc"><button type="button" class="q ui js-foldup">'
                 . expander(null, 0)
-                . '</a>'
-                . '<span class="fn"><a href="" class="ui js-foldup q">'
+                . '</button>'
+                . '<span class="fn"><button type="button" class="q ui js-foldup">'
                 . sprintf($this->conf->_($fmt, count($ts)), count($ts))
-                . '</a></span><span class="fx">' . join(", ", $ts)
+                . '</button></span><span class="fx">' . join(", ", $ts)
                 . '</span></div>';
         }
     }
@@ -477,10 +481,10 @@ class Log_Page {
         if (!empty($trs)) {
             echo "<table class=\"pltable fullw pltable-log\">\n",
                 '  <thead><tr class="pl_headrow">',
-                '<th class="pll plh pl_logtime">Time</th>',
-                '<th class="pll plh pl_logname">User</th>',
-                '<th class="pll plh pl_logname">Affected user</th>',
-                '<th class="pll plh pl_logaction">Action</th></tr></thead>',
+                '<th class="pl plh pl_logtime">Time</th>',
+                '<th class="pl plh pl_logname">User</th>',
+                '<th class="pl plh pl_logname">Affected user</th>',
+                '<th class="pl plh pl_logaction">Action</th></tr></thead>',
                 "\n  <tbody class=\"pltable\">\n";
             foreach ($trs as $n => $row) {
                 $this->print_entry($row, $n, $leg);
@@ -501,7 +505,11 @@ class Log_Page {
         echo '<tr class="plnx k', $n % 2, '">';
 
         // timestamp
-        $time = $conf->unparse_time_log((int) $row->timestamp);
+        if ($this->unix_timestamp) {
+            $time = "@{$row->timestamp}";
+        } else {
+            $time = $conf->unparse_time_log((int) $row->timestamp);
+        }
         echo '<td class="pl pl_logtime">', $time, '</td>';
 
         // users
@@ -598,15 +606,15 @@ class Log_Page {
         if ($qreq->page === "earliest") { // NB `page` URL PARAMETER
             $page = null;
         } else {
-            $page = max(cvtint($qreq->page, -1), 1);
+            $page = max(stoi($qreq->page) ?? -1, 1);
         }
 
         $count = 50;
         if (isset($qreq->n) && trim($qreq->n) !== "") {
-            $count = cvtint($qreq->n, -1);
+            $count = stoi($qreq->n) ?? -1;
         }
         $bad_count = $count <= 0;
-        $count = $bad_count ? 50 : min($count, 200);
+        $count = $bad_count ? 50 : min($count, 300);
 
         $qreq->q = trim((string) $qreq->q);
         $qreq->p = trim((string) $qreq->p);

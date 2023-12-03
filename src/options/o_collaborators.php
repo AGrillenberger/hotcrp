@@ -1,22 +1,26 @@
 <?php
 // o_collaborators.php -- HotCRP helper class for collaborators intrinsic
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Collaborators_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args);
-        $this->set_exists_condition(!!$this->conf->setting("sub_collab"));
     }
     function value_force(PaperValue $ov) {
         if (($collab = $ov->prow->collaborators()) !== "") {
             $ov->set_value_data([1], [$collab]);
         }
     }
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_present(PaperValue $ov) {
+        return $ov->value
+            && (strlen($ov->data()) > 10
+                || strcasecmp(trim($ov->data()), "none") !== 0);
+    }
+    function value_export_json(PaperValue $ov, PaperExport $pex) {
         return $ov->value ? $ov->data() : null;
     }
     function value_check(PaperValue $ov, Contact $user) {
-        if (!$this->value_present($ov)
+        if (!$ov->value /* because "None" should cause no error */
             && !$ov->prow->allow_absent()
             && ($ov->prow->outcome_sign <= 0 || !$user->can_view_decision($ov->prow))) {
             $ov->warning($this->conf->_("<0>Enter the authors’ external conflicts of interest"));
@@ -27,11 +31,11 @@ class Collaborators_PaperOption extends PaperOption {
         $ps->change_at($this);
         $collab = $ov->data();
         if ($collab === null || strlen($collab) < 8190) {
-            $ps->save_paperf("collaborators", $collab === "" ? null : $collab);
-            $ps->update_paperf_overflow("collaborators", null);
+            $ov->prow->set_prop("collaborators", $collab === "" ? null : $collab);
+            $ov->prow->set_overflow_prop("collaborators", null);
         } else {
-            $ps->save_paperf("collaborators", null);
-            $ps->update_paperf_overflow("collaborators", $collab);
+            $ov->prow->set_prop("collaborators", null);
+            $ov->prow->set_overflow_prop("collaborators", $collab);
         }
         return true;
     }
@@ -55,8 +59,19 @@ class Collaborators_PaperOption extends PaperOption {
         }
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        if ($pt->editable !== "f" || $pt->user->can_administer($pt->prow)) {
-            $this->print_web_edit_text($pt, $ov, $reqov, ["no_format_description" => true, "no_spellcheck" => true, "rows" => 5]);
+        $this->print_web_edit_text($pt, $ov, $reqov, ["no_format_description" => true, "no_spellcheck" => true, "rows" => 5]);
+    }
+    function render(FieldRender $fr, PaperValue $ov) {
+        $n = ["<ul class=\"x namelist-columns\">"];
+        foreach (explode("\n", htmlspecialchars($ov->data())) as $line) {
+            if (strlen($line) > 6 || strcasecmp(trim($line), "none") !== 0)
+                $n[] = "<li class=\"od\">{$line}</li>";
+        }
+        if (count($n) === 1) {
+            $fr->set_text("None");
+        } else {
+            $n[] = "</ul>";
+            $fr->set_html(join("", $n));
         }
     }
     // XXX no render because paper strip

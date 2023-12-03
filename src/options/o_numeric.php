@@ -1,6 +1,6 @@
 <?php
 // o_numeric.php -- HotCRP helper class for whole-number options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Numeric_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
@@ -11,7 +11,7 @@ class Numeric_PaperOption extends PaperOption {
         return PaperOption::basic_value_compare($av, $bv);
     }
 
-    function value_unparse_json(PaperValue $ov, PaperStatus $ps) {
+    function value_export_json(PaperValue $ov, PaperExport $ps) {
         return $ov->value;
     }
 
@@ -45,8 +45,7 @@ class Numeric_PaperOption extends PaperOption {
                 "id" => $this->readable_formid(), "size" => 8,
                 "size" => 8, "inputmode" => "numeric",
                 "class" => "js-autosubmit" . $pt->has_error_class($this->formid),
-                "data-default-value" => $ov->value ?? "",
-                "readonly" => !$this->test_editable($ov->prow)
+                "data-default-value" => $ov->value ?? ""
             ]),
             "</div></div>\n\n";
     }
@@ -82,6 +81,8 @@ class Numeric_PaperOption extends PaperOption {
     }
 
     function parse_fexpr(FormulaCall $fcall, &$t) {
-        return new OptionValue_Fexpr($this);
+        $fex = new OptionValue_Fexpr($this);
+        $fex->set_format(Fexpr::FNUMERIC);
+        return $fex;
     }
 }

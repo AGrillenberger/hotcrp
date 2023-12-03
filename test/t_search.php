@@ -1,6 +1,6 @@
 <?php
 // t_search.php -- HotCRP tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Search_Tester {
     /** @var Conf
@@ -30,6 +30,10 @@ class Search_Tester {
                     "#foo in:submitted");
         xassert_eqq(PaperSearch::canonical_query("foo OR abstract:bar", "", "", "tag", $this->conf, "s"),
                     "(#foo OR abstract:bar) in:submitted");
+        xassert_eqq(PaperSearch::canonical_query("-has:submission", "", "", "", $this->conf),
+                    "-has:submission");
+        xassert_eqq(PaperSearch::canonical_query("NOT (foo OR bar)", "", "", "", $this->conf),
+                    "NOT (foo OR bar)");
     }
 
     function test_sort_etag() {
@@ -68,11 +72,11 @@ class Search_Tester {
     function test_review_term_to_round_mask() {
         $rl = $this->conf->round_list();
         xassert_eqq($rl[0], "");
-        xassert_eqq($this->conf->round_number("unnamed", false), 0);
+        xassert_eqq($this->conf->round_number("unnamed"), 0);
         xassert_eqq($rl[1], "R1");
-        xassert_eqq($this->conf->round_number("R1", false), 1);
+        xassert_eqq($this->conf->round_number("R1"), 1);
         xassert_eqq($rl[2], "R2");
-        xassert_eqq($this->conf->round_number("R2", false), 2);
+        xassert_eqq($this->conf->round_number("R2"), 2);
         xassert_eqq($rl[3], "R3");
 
         $u = $this->conf->root_user();
@@ -102,5 +106,36 @@ class Search_Tester {
 
         $st = (new PaperSearch($u, "(re:unnamed) OR (re:R1 OR re:R2)"))->main_term();
         xassert_eqq(Review_SearchTerm::term_round_mask($st), [7, false]);
+    }
+
+    function test_term_phase() {
+        $u = $this->conf->root_user();
+        $st = (new PaperSearch($u, "phase:final"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), PaperInfo::PHASE_FINAL);
+        $st = (new PaperSearch($u, "phase:review"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), PaperInfo::PHASE_REVIEW);
+        $st = (new PaperSearch($u, "NOT phase:final"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), null);
+        $st = (new PaperSearch($u, "all"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), null);
+        $st = (new PaperSearch($u, "phase:final 1-10 OR phase:final 12-30"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), PaperInfo::PHASE_FINAL);
+        $st = (new PaperSearch($u, "phase:final AND 1-10"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), PaperInfo::PHASE_FINAL);
+        $st = (new PaperSearch($u, "phase:final 1-10 OR 12-30"))->main_term();
+        xassert_eqq(Phase_SearchTerm::term_phase($st), null);
+    }
+
+    function test_all() {
+        $u = $this->conf->root_user();
+        $base_ids = (new PaperSearch($u, ""))->paper_ids();
+        $ids = (new PaperSearch($u, "all"))->paper_ids();
+        xassert_eqq($ids, $base_ids);
+        $ids = (new PaperSearch($u, "show:title all"))->paper_ids();
+        xassert_eqq($ids, $base_ids);
+        $ids = (new PaperSearch($u, "show:title ALL"))->paper_ids();
+        xassert_eqq($ids, $base_ids);
+        $ids = (new PaperSearch($u, "\"all\""))->paper_ids();
+        xassert_neqq($ids, $base_ids);
     }
 }

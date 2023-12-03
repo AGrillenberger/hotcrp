@@ -39,7 +39,7 @@ class AutoassignerInterface extends MessageSet {
         }
         foreach (get_object_vars($costs) as $k => $v) {
             if ($qreq && isset($qreq["{$k}_cost"])
-                && ($v = cvtint($qreq["{$k}_cost"], null)) !== null)
+                && ($v = stoi($qreq["{$k}_cost"])) !== null)
                 $costs->$k = $v;
         }
         return $costs;
@@ -174,7 +174,7 @@ class AutoassignerInterface extends MessageSet {
      * @return Assignment_PaperColumn */
     private function print_result_html_1($assignmenttext) {
         // Divided into separate functions to facilitate garbage collection
-        $assignset = new AssignmentSet($this->user, true);
+        $assignset = (new AssignmentSet($this->user))->set_override_conflicts(true);
         $assignset->set_search_type($this->qreq->t);
         $assignset->parse($assignmenttext);
 

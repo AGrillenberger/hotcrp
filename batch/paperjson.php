@@ -1,6 +1,6 @@
 <?php
 // paperjson.php -- HotCRP paper export script
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -54,10 +54,10 @@ class PaperJson_Batch {
         ]);
 
         $apj = [];
-        $ps = new PaperStatus($conf, $this->user, ["hide_docids" => true]);
+        $pex = new PaperExport($this->user);
         $rf = $conf->review_form();
         foreach ($pset as $prow) {
-            $pj1 = $ps->paper_json($prow);
+            $pj1 = $pex->paper_json($prow);
             if ($this->reviews) {
                 foreach ($prow->reviews_as_display() as $rrow) {
                     $pj1->reviews[] = $rf->unparse_review_json($this->user, $prow, $rrow);

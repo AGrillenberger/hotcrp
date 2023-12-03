@@ -1,6 +1,6 @@
 <?php
 // dbl.php -- database interface layer
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Dbl_Result {
     /** @var int */
@@ -32,6 +32,18 @@ class Dbl_Result {
         $r->insert_id = null;
         $r->errno = 0;
         return $r;
+    }
+    /** @return Dbl_Result */
+    static function make_error() {
+        $r = new Dbl_Result;
+        $r->affected_rows = $r->warning_count = 0;
+        $r->insert_id = null;
+        $r->errno = 2002; /* CR_CONNECTION_ERROR */
+        return $r;
+    }
+    /** @return bool */
+    function is_error() {
+        return $this->errno !== 0;
     }
     /** @return list<array<int,?string>> */
     function fetch_all() {
@@ -248,28 +260,6 @@ class Dbl {
         return $cp;
     }
 
-    /** @param array<string,mixed>|Dbl_ConnectionParams $opt
-     * @return array{?\mysqli,?string}
-     * @deprecated */
-    static function connect($opt, $noconnect = false) {
-        $cp = is_array($opt) ? self::parse_connection_params($opt) : $opt;
-        if (!$cp) {
-            return [null, null];
-        } else if ($noconnect) {
-            return [null, $cp->name];
-        } else {
-            return [$cp->connect(), $cp->name];
-        }
-    }
-
-    /** @param string $dsn
-     * @return array{?\mysqli,?string}
-     * @deprecated */
-    static function connect_dsn($dsn, $noconnect = false) {
-        /** @phan-suppress-next-line PhanDeprecatedFunction */
-        return self::connect(self::parse_connection_params(["dsn" => $dsn]), $noconnect);
-    }
-
     /** @param \mysqli $dblink */
     static function set_default_dblink($dblink) {
         self::$default_dblink = $dblink;
@@ -316,7 +306,7 @@ class Dbl {
         if (($flags & self::F_MULTI) && is_array($q)) {
             $q = join(";", $q);
         }
-        if ($log_location && self::$query_log !== false) {
+        if ($log_location && is_array(self::$query_log)) {
             self::$query_log_key = $qx = simplify_whitespace($q);
             if (isset(self::$query_log[$qx])) {
                 ++self::$query_log[$qx][1];
@@ -528,6 +518,9 @@ class Dbl {
         }
         return $result;
     }
+
+    // NB The following functions are intentionally misdeclared to return
+    // `Dbl_Result`. The true return type is `Dbl_Result|\mysqli_result`.
 
     /** @return Dbl_Result */
     static private function do_query_with($dblink, $qstr, $argv, $flags) {
@@ -755,7 +748,7 @@ class Dbl {
      * @return bool */
     static function is_error($result) {
         return !$result
-            || ($result instanceof Dbl_Result && $result->errno);
+            || ($result instanceof Dbl_Result && $result->errno !== 0);
     }
 
     static private function do_make_result($args, $flags = self::F_ERROR) {
@@ -861,7 +854,7 @@ class Dbl {
      * @param string $update_query
      * @param array $update_query_args
      * @return null|int|string */
-    static function compare_and_swap($dblink, $value_query, $value_query_args,
+    static function compare_exchange($dblink, $value_query, $value_query_args,
                                      $callback, $update_query, $update_query_args) {
         for ($n = 0; $n < 200; ++$n) {
             $result = self::qe_apply($dblink, $value_query, $value_query_args);
@@ -877,16 +870,36 @@ class Dbl {
                 return $new_value;
             }
         }
-        throw new Exception("Dbl::compare_and_swap failure on query `" . Dbl::format_query_args($dblink, $value_query, $value_query_args) . "`");
+        throw new Exception("Dbl::compare_exchange failure on query `" . Dbl::format_query_args($dblink, $value_query, $value_query_args) . "`");
     }
 
-    /** @param null|bool|float $limit
+    /** @param mysqli $dblink
+     * @param string $value_query
+     * @param array $value_query_args
+     * @param callable(?string):(null|int|string) $callback
+     * @param string $update_query
+     * @param array $update_query_args
+     * @return null|int|string
+     * @deprecated */
+    static function compare_and_swap($dblink, $value_query, $value_query_args,
+                                     $callback, $update_query, $update_query_args) {
+        return self::compare_exchange($dblink, $value_query, $value_query_args, $callback, $update_query, $update_query_args);
+    }
+
+    /** @param null|bool|float|'verbose' $limit
      * @param ?string $file */
     static function log_queries($limit, $file = null) {
-        if (is_float($limit)) {
-            $limit = $limit >= 1 || ($limit > 0 && mt_rand() < $limit * mt_getrandmax());
+        if ($limit === "verbose") {
+            self::$verbose = true;
+            return;
         }
-        if (!$limit) {
+        if (is_bool($limit)) {
+            $limit = $limit ? 1.0 : 0.0;
+        } else if (!is_float($limit)) {
+            $limit = (float) $limit;
+        }
+        if ($limit <= 0
+            || ($limit < 1 && mt_rand() >= $limit * (mt_getrandmax() + 1))) {
             self::$query_log = false;
         } else if (self::$query_log === false) {
             register_shutdown_function("Dbl::shutdown");
@@ -896,7 +909,7 @@ class Dbl {
     }
 
     static function shutdown() {
-        if (self::$query_log) {
+        if (is_array(self::$query_log)) {
             uasort(self::$query_log, function ($a, $b) {
                 return $b[0] <=> $a[0];
             });
@@ -907,7 +920,7 @@ class Dbl {
             $qlog = "";
             foreach (self::$query_log as $where => $what) {
                 $a = [$what[0], $what[1], $what[2], $where];
-                $qlog .= "query_log: $self #$i/$n: " . json_encode($a) . "\n";
+                $qlog .= "query_log: {$self} #{$i}/{$n}: " . json_encode($a) . "\n";
                 ++$i;
                 $t[0] += $what[0];
                 $t[1] += $what[1];
@@ -962,7 +975,7 @@ class Dbl {
             $dblink = self::$default_dblink;
         }
         $utf8 = $dblink->server_version >= 50503 ? "utf8mb4" : "utf8";
-        return "convert($qstr using $utf8)";
+        return "convert({$qstr} using {$utf8})";
     }
 
     /** @param string $str

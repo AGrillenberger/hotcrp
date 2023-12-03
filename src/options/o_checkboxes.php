@@ -1,6 +1,6 @@
 <?php
 // o_checkboxes.php -- HotCRP helper class for checkboxes options
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
     use Multivalue_OptionTrait;
@@ -32,8 +32,6 @@ class Checkboxes_PaperOption extends CheckboxesBase_PaperOption {
     function export_setting() {
         $sfs = parent::export_setting();
         $this->unparse_values_setting($sfs);
-        $sfs->min = $this->min_count;
-        $sfs->max = $this->max_count;
         return $sfs;
     }
 

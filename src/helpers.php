@@ -5,7 +5,8 @@
 // string helpers
 
 /** @param null|int|string $value
- * @return int */
+ * @return int
+ * @deprecated */
 function cvtint($value, $default = -1) {
     $v = trim((string) $value);
     if (is_numeric($v)) {
@@ -15,6 +16,20 @@ function cvtint($value, $default = -1) {
         }
     }
     return $default;
+}
+
+/** @param null|int|string $s
+ * @return ?int */
+function stoi($s) {
+    if ($s === null || is_int($s)) {
+        return $s;
+    }
+    $v = trim((string) $s);
+    if (is_numeric($v)
+        && ($iv = intval($v)) == floatval($v)) {
+        return $iv;
+    }
+    return null;
 }
 
 /** @param null|int|float|string $value
@@ -65,25 +80,14 @@ function hoturl_add_raw($url, $component) {
     return $url . (strpos($url, "?") === false ? "?" : "&") . $component;
 }
 
-/** @param string $page
- * @param null|string|array $param
- * @return string
- * @deprecated */
-function hoturl($page, $param = null) {
-    return Conf::$main->hoturl($page, $param);
-}
-
-/** @deprecated */
-function hoturl_post($page, $param = null) {
-    return Conf::$main->hoturl($page, $param, Conf::HOTURL_POST);
-}
-
 
 class JsonResult implements JsonSerializable, ArrayAccess {
     /** @var ?int */
     public $status;
     /** @var array<string,mixed> */
     public $content;
+    /** @var bool */
+    public $pretty_print;
 
     /** @param int|array<string,mixed>|\stdClass|\JsonSerializable $a1
      * @param ?array<string,mixed> $a2 */
@@ -111,18 +115,6 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         } else {
             assert(is_associative_array($a2));
             $this->content = $a2;
-        }
-    }
-
-    /** @return JsonResult
-     * @deprecated */
-    static function make($jr, $arg2 = null) {
-        if ($jr instanceof JsonResult) {
-            return $jr;
-        } else if (is_int($jr)) {
-            return new JsonResult($jr, $arg2);
-        } else {
-            return new JsonResult($jr);
         }
     }
 
@@ -168,6 +160,14 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     static function make_not_found_error($field = null, $ftext = null) {
         $mi = new MessageItem($field, $ftext ?? "<0>Not found", 2);
         return new JsonResult(404, ["ok" => false, "message_list" => [$mi]]);
+    }
+
+
+    /** @param bool $pp
+     * @return $this */
+    function pretty_print($pp) {
+        $this->pretty_print = $pp;
+        return $this;
     }
 
 
@@ -225,6 +225,8 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         header("Content-Type: application/json; charset=utf-8");
         if (Qrequest::$main_request && isset(Qrequest::$main_request->pprint)) {
             $pprint = friendly_boolean(Qrequest::$main_request->pprint);
+        } else if ($this->pretty_print !== null) {
+            $pprint = $this->pretty_print;
         } else {
             $pprint = Contact::$main_user && Contact::$main_user->is_bearer_authorized();
         }
@@ -297,12 +299,12 @@ function expander($open, $foldnum = null, $open_tooltip = null) {
     $foldnum = ($foldnum !== 0 ? $foldnum : "");
     $t = '<span class="expander">';
     if ($open !== true) {
-        $t .= '<span class="in0' . ($f ? " fx$foldnum" : "") . '">' . Icons::ui_triangle(2) . '</span>';
+        $t .= '<span class="in0' . ($f ? " fx{$foldnum}" : "") . '">' . Icons::ui_triangle(2) . '</span>';
     }
     if ($open !== false) {
-        $t .= '<span class="in1' . ($f ? " fn$foldnum" : "");
+        $t .= '<span class="in1' . ($f ? " fn{$foldnum}" : "");
         if ($open_tooltip) {
-            $t .= ' need-tooltip" data-tooltip="' . htmlspecialchars($open_tooltip) . '" data-tooltip-anchor="e';
+            $t .= ' need-tooltip" aria-label="' . htmlspecialchars($open_tooltip) . '" data-tooltip-anchor="e';
         }
         $t .= '">' . Icons::ui_triangle(1) . '</span>';
     }
@@ -328,10 +330,10 @@ function clean_tempdirs() {
     $now = time();
     while (($fname = readdir($dirh)) !== false) {
         if (preg_match('/\Ahotcrptmp\d+\z/', $fname)
-            && is_dir("$dir/$fname")
-            && ($mtime = @filemtime("$dir/$fname")) !== false
+            && is_dir("{$dir}/{$fname}")
+            && ($mtime = @filemtime("{$dir}/{$fname}")) !== false
             && $mtime < $now - 1800)
-            rm_rf_tempdir("$dir/$fname");
+            rm_rf_tempdir("{$dir}/{$fname}");
     }
     closedir($dirh);
 }
@@ -405,14 +407,6 @@ function plural_word($n, $singular, $plural = null) {
     }
 }
 
-/** @param int|float|array $n
- * @param string $singular
- * @return string
- * @deprecated */
-function pluralx($n, $singular) {
-    return plural_word($n, $singular);
-}
-
 /** @param string $s
  * @return string
  * @suppress PhanParamSuspiciousOrder */
@@ -464,14 +458,10 @@ function plural($n, $singular, $plural = null) {
 /** @param int $n
  * @return string */
 function ordinal($n) {
-    $x = $n;
-    if ($x > 100) {
-        $x = $x % 100;
-    }
-    if ($x > 20) {
-        $x = $x % 10;
-    }
-    return $n . ($x < 1 || $x > 3 ? "th" : ($x == 1 ? "st" : ($x == 2 ? "nd" : "rd")));
+    $x = abs($n);
+    $x > 100 && ($x = $x % 100);
+    $x > 20 && ($x = $x % 10);
+    return $n . (["th", "st", "nd", "rd"])[$x > 3 ? 0 : $x];
 }
 
 /** @param int|float $n
@@ -556,7 +546,8 @@ function unparse_expertise($expertise) {
 }
 
 /** @param array{int,?int} $preference
- * @return string */
+ * @return string
+ * @deprecated */
 function unparse_preference($preference) {
     assert(is_array($preference)); // XXX remove
     $pv = $preference[0];
@@ -565,33 +556,6 @@ function unparse_preference($preference) {
         $pv = "0";
     }
     return $pv . unparse_expertise($ev);
-}
-
-/** @param array{int,?int} $preference
- * @return string */
-function unparse_preference_span($preference, $always = false) {
-    assert(is_array($preference)); // XXX remove
-    $pv = (int) $preference[0];
-    $ev = $preference[1];
-    $tv = (int) ($preference[2] ?? null);
-    if ($pv > 0 || (!$pv && $tv > 0)) {
-        $type = 1;
-    } else if ($pv < 0 || $tv < 0) {
-        $type = -1;
-    } else {
-        $type = 0;
-    }
-    $t = "";
-    if ($pv || $ev !== null || $always) {
-        $t .= "P" . unparse_number_pm_html($pv) . unparse_expertise($ev);
-    }
-    if ($tv && !$pv) {
-        $t .= ($t ? " " : "") . "T" . unparse_number_pm_html($tv);
-    }
-    if ($t !== "") {
-        $t = " <span class=\"asspref$type\">$t</span>";
-    }
-    return $t;
 }
 
 /** @param int $revtype

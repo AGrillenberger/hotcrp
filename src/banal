@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 #
 # Copyright (C) 2007 Geoffrey M. Voelker
-# Copyright (c) 2016-2022 Eddie Kohler; see LICENSE.
+# Copyright (c) 2016-2023 Eddie Kohler; see LICENSE.
 #
 # banal -- analyze pdf formatting
 #
@@ -57,6 +57,7 @@ banal has three modes of operation:
 
 -json     print JSON output
 -pagenum  include page numbers and headings
+-no-time  do not print timestamp
 -debug-words debug words
 
 -zoom=N   passed to pdftohtml
@@ -74,7 +75,7 @@ my($banal_version) = 1.2;
 
 # parse args
 my ($banal_mode) = "report";
-my (%banal_param, $json_pagenum);
+my (%banal_param, $json_pagenum, $no_timestamp);
 my ($debug_pdftohtml, $debug_words);
 for (my $i = 0; $i < @ARGV; ) {
     if ($ARGV[$i] =~ /\A--?(stats|json|report|version)\z/) {
@@ -88,6 +89,9 @@ for (my $i = 0; $i < @ARGV; ) {
         splice @ARGV, $i, 1;
     } elsif ($ARGV[$i] =~ /\A--?(?:pagen(?:um|o)|headings|headers)\z/) {
         $json_pagenum = 1;
+        splice @ARGV, $i, 1;
+    } elsif ($ARGV[$i] =~ /\A--?(?:no-?time(?:stamp|))\z/) {
+        $no_timestamp = 1;
         splice @ARGV, $i, 1;
     } elsif ($ARGV[$i] =~ /\A--?(zoom|max[-_]pages)=(.*)\z/) {
         my($name) = $1;
@@ -486,16 +490,46 @@ sub interval_overlap ($$$$) {
 
 sub column_gap_overlap {
     my ($text, $coll, $colr, $tt, $th, $bodyfontsize) = @_;
-    my ($slack) = in2pdf(1/8);
     my ($gap) = 0;
     if ($text->{sz} <= $bodyfontsize
         && interval_overlap($coll, $colr - $coll, $text->{l}, $text->{w})) {
+        my ($slack) = $text->{sz} * 0.5;
         $gap |= 1 if $text->{t} >= $tt + $th
                 && $text->{t} - ($tt + $th) < $slack;
         $gap |= 2 if $tt >= $text->{t} + $text->{h}
                 && $tt - ($text->{t} + $text->{h}) < $slack;
     }
     return $gap;
+}
+
+sub line_combine {
+    my ($text, $tt, $th, $tl, $tr, $slack, $isright) = @_;
+    my ($textl) = $text->{l};
+    my ($textr) = $textl + $text->{w};
+    return interval_overlap($tt, $th, $text->{t}, $text->{h})
+        && ($isright ? $textl >= $tr - $slack : $tl >= $textr - $slack)
+        && ($isright ? $textl < $tr + 3 * $slack : $tl < $textr + 3 * $slack);
+}
+
+sub heading_number ($) {
+    my ($t) = @_;
+    if ($t =~ /\A(\d+)((?:\.\d+)*)/) {
+        (+$1, +$1, $1 . $2, 1);
+    } elsif ($t =~ /\A(X*)(I+|IV|VI*|IX|)((?:\.\d+)*)/ && ($1 || $2)) {
+        my ($n) = length($1) * 10;
+        if ($2 eq "IX") {
+            $n += 9;
+        } elsif ($2 eq "IV") {
+            $n += 4;
+        } elsif (substr($2, 0, 1) eq "V") {
+            $n += 5 + length($2) - 1;
+        } else {
+            $n += length($2);
+        }
+        ($n, $1 . $2, $1 . $2 . $3, 0);
+    } else {
+        (0, 0, 0, 0);
+    }
 }
 
 sub calc_page_headings ($$$$) {
@@ -506,6 +540,9 @@ sub calc_page_headings ($$$$) {
     my ($near_top) = 1;
     my ($in_refs_top) = $doc->{in_references};
     my ($contents) = 0;
+    my ($min_section) = $doc->{max_section};
+    my ($max_section) = $min_section;
+    my ($nskipped) = 0;
 
     TPOS: for (my $tpos = 0; $tpos < @$texts; ) {
         my ($tpos1) = $tpos;
@@ -526,20 +563,28 @@ sub calc_page_headings ($$$$) {
         my ($content) = $text->{content};
         if ($content !~ /\A[\dABCDEFGHIRVX]/) {
             ++$tpos;
+            ++$nskipped;
             next;
         }
 
         # compute length of line
         my ($tl) = $text->{l};
         my ($tr) = $tl + $text->{w};
+        if ($nskipped > 0
+            && line_combine($texts->[$tpos-1], $tt, $th, $tl, $tr, $slack, 0)) {
+            ++$tpos;
+            ++$nskipped;
+            next;
+        }
+
+        $nskipped = 0;
         ++$tpos;
         while ($tpos < @$texts
-               && interval_overlap($tt, $th, $texts->[$tpos]->{t}, $texts->[$tpos]->{h})
-               && $texts->[$tpos]->{l} >= $tr - $slack
-               && $texts->[$tpos]->{l} < $tr + 3 * $slack) {
-            $content .= " " if $texts->[$tpos]->{l} - $tr > $text->{sz} / 6;
+               && line_combine($texts->[$tpos], $tt, $th, $tl, $tr, $slack, 1)) {
+            my ($textl) = $texts->[$tpos]->{l};
+            $content .= " " if $textl - $tr > $text->{sz} / 6;
             $content .= $texts->[$tpos]->{content};
-            $tr = $texts->[$tpos]->{l} + $texts->[$tpos]->{w};
+            $tr = $textl + $texts->[$tpos]->{w};
             ++$tpos;
         }
 
@@ -577,44 +622,58 @@ sub calc_page_headings ($$$$) {
         }
 
         # skip if part of paragraph
+        # (if font is body size, require that there be space before the heading)
         if ($text->{sz} <= $bodyfontsize) {
             my ($gaps) = 0;
             my ($tposl) = $tpos1 - 1;
             my ($tposr) = $tpos;
             while ($tposl >= 0 || $tposr < @$texts) {
-                $gaps |= column_gap_overlap($texts->[$tposl], $coll, $colr, $tt, $th, $bodyfontsize) if $tposl >= 0;
-                $gaps |= column_gap_overlap($texts->[$tposr], $coll, $colr, $tt, $th, $bodyfontsize) if $tposr < @$texts;
-                if ($gaps == 3) {
+                if ($tposl >= 0) {
+                    $gaps |= column_gap_overlap($texts->[$tposl], $coll, $colr, $tt, $th, $bodyfontsize);
+                    #print STDERR "kill @" . $texts->[$tposl]->{content} . " " . $texts->[$tposl]->{sz} ."($bodyfontsize) [$content]\n" if $gaps & 2;
+                    --$tposl;
+                }
+                if ($tposr < @$texts) {
+                    $gaps |= column_gap_overlap($texts->[$tposr], $coll, $colr, $tt, $th, $bodyfontsize);
+                    #print STDERR "kill @" . $texts->[$tposr]->{content} . " [$content]\n" if $gaps & 2;
+                    ++$tposr;
+                }
+                if ($gaps & 2) {
                     next TPOS;
                 }
-                --$tposl;
-                ++$tposr;
             }
         }
 
         # skip if already seen or unexpected
-        if ($content =~ /\A(\d+)((?:\.\d+)*)/) {
-            if ($1 > 99 && $doc->{max_numeric_heading} > 0 && $doc->{max_numeric_heading} < 20) {
+        my($hnum, $htxt, $hstxt, $hisnum) = heading_number($content);
+        if ($hisnum) {
+            if ($hnum > 99
+                && $doc->{max_numeric_heading} > 0
+                && $doc->{max_numeric_heading} < 20) {
                 next TPOS;
             }
-            if (exists($doc->{headings}->{$1 . $2})) {
+            if (exists($doc->{headings}->{$hstxt})) {
                 next TPOS;
             }
-            $doc->{max_numeric_heading} = +$1 if $1 > $doc->{max_numeric_heading};
-            $doc->{headings}->{$1} = 1;
+            $doc->{max_numeric_heading} = $hnum if $hnum > $doc->{max_numeric_heading};
+            $doc->{headings}->{$hstxt} = 1;
         }
 
         if (!exists($page->{headings})) {
             $page->{headings} = [];
             $page->{heading_texts} = [];
         }
-        $page->{headings} = [] if !exists $page->{headings};
         push @{$page->{headings}}, $content;
         $text->{coll} = $coll;
         $text->{colr} = $colr;
         $text->{is_references} = $content =~ /\A(?:References?|Bibliography)\z/i;
         $page->{heading1} = $text->{heading1} = 1 if $was_near_top;
         push @{$page->{heading_texts}}, $text;
+        $page->{max_heading_fontsize} = $text->{sz} if $text->{sz} > $page->{max_heading_fontsize};
+        if ($hnum > 0 && $hnum > $min_section) {
+            $page->{first_section} = $hnum if !exists($page->{first_section}) || $page->{first_section} > $hnum;
+            $max_section = $hnum if $hnum > $max_section;
+        }
 
         # skip rest if saw contents
         if (@{$page->{headings}} == 1
@@ -622,31 +681,8 @@ sub calc_page_headings ($$$$) {
             last TPOS;
         }
     }
-}
 
-sub calc_doc_body_font ($) {
-    my ($doc) = @_;
-    my ($fonts) = {};
-
-    foreach my $i (1..$doc->{npages}) {
-        my ($page) = $doc->{pages}->{$i};
-        next if !exists $page->{bodyfont_pt};
-        $fonts->{$page->{bodyfont_pt}}++;
-    }
-
-    $doc->{bodyfont_pt} = modevalkey ($fonts);
-}
-
-sub calc_doc_leading ($) {
-    my ($doc) = @_;
-
-    my ($leads) = {};
-    foreach my $i (1..$doc->{npages}) {
-        my ($page) = $doc->{pages}->{$i};
-        next if !exists $page->{lead_pt};
-        $leads->{$page->{lead_pt}}++;
-    }
-    $doc->{lead_pt} = modevalkey ($leads);
+    $doc->{max_section} = $max_section;
 }
 
 sub calc_doc_text_region ($) {
@@ -730,7 +766,6 @@ sub version_compare ($$) {
 sub calc_doc_page_types ($) {
     my ($doc) = @_;
 
-    my ($font) = $doc->{bodyfont_pt};
     my ($saw_acks_refs) = 0;
     my ($saw_appendix) = 0;
     my ($saw_conclusion) = 0;
@@ -760,13 +795,18 @@ sub calc_doc_page_types ($) {
                 } elsif ($h =~ /\AAppendix/i) {
                     $see_appendix = "yes";
                     $saw_appendix = $see_appendix if $saw_acks_refs || $is_first;
-                } elsif (!$see_appendix || $h =~ /\A[\dIVX]+[\. ]/) {
+                } elsif ((!$see_appendix
+                          || $h =~ /\A[\dIVX]+[\. ]/)
+                         && (!$saw_appendix
+                             || (exists($page->{bodyfontsize})
+                                 && $page->{max_heading_fontsize} > $page->{bodyfontsize}))) {
                     $see_acks_refs = $saw_acks_refs = $saw_appendix = $saw_conclusion = 0;
                 }
                 $is_first = 0;
             }
         }
 
+        # see CheckFormat if you change these names
         my ($type) = "body";
         if (!exists $page->{nchars} || $page->{nchars} == 0) {
             $type = "blank";
@@ -815,7 +855,7 @@ sub calc_doc_columns ($) {
 sub p2h_font_bug ($) {
     my ($doc) = @_;
 
-    return 1 if !defined($doc->{bodyfont_pt}) || $doc->{bodyfont_pt} <= 0;
+    return 1 if !defined($doc->{bodyfontsize}) || $doc->{bodyfontsize} <= 0;
     return 0;
 }
 
@@ -848,7 +888,8 @@ sub report_json ($) {
     my ($doc) = @_;
     binmode STDOUT, ':utf8';
 
-    printf "{\n  \"at\": %d,\n", time;
+    printf "{\n";
+    printf "  \"at\": %d,\n", time if !$no_timestamp;
     printf "  \"args\": %s,\n", json_quote(join(" ", @switches)) if @switches;
 
     my $dx = {"pw" => {}, "ph" => {}, "tw" => {}, "th" => {}, "mt" => {}, "ml" => {}, "mr" => {}, "mb" => {}};
@@ -904,7 +945,7 @@ sub report_json ($) {
         $doc_bfs = "\"bodyfontsize\": null";
         $doc_l = "\"leading\": null";
     } else {
-        $doc_bfs = sprintf "\"bodyfontsize\": %g", $doc->{bodyfont_pt};
+        $doc_bfs = sprintf "\"bodyfontsize\": %g", pdf2pt($doc->{bodyfontsize});
         $doc_l = sprintf "\"leading\": %g", $doc->{lead_pt};
     }
     my ($doc_c) = sprintf "\"columns\": %d", $doc->{ncols};
@@ -939,12 +980,13 @@ sub report_json ($) {
         if ($page->{type} ne "blank") {
             my($page_margin) = sprintf "\"margin\": [%.0f,%.0f,%.0f,%.0f]", $pd->{mt}, $pd->{pw} - ($pd->{ml} + $pd->{tw}), $pd->{ph} - ($pd->{mt} + $pd->{th}), $pd->{ml};
             push @val, $page_margin if $page_margin ne $doc_margin;
-            if (exists($page->{bodyfont_pt})) {
-                my($page_bfs) = sprintf "\"bodyfontsize\": %g", $page->{bodyfont_pt};
+            if (exists($page->{bodyfontsize})) {
+                my($page_bfs) = sprintf "\"bodyfontsize\": %g", pdf2pt($page->{bodyfontsize});
                 push @val, $page_bfs if $page_bfs ne $doc_bfs;
             }
-            if (exists($page->{reffont_pt}) && $page->{reffont_pt} != $doc->{bodyfont_pt}) {
-                push @val, sprintf "\"reffontsize\": %g", $page->{reffont_pt};
+            if (exists($page->{reffontsize})
+                && $page->{reffontsize} != $doc->{bodyfontsize}) {
+                push @val, sprintf "\"reffontsize\": %g", pdf2pt($page->{reffontsize});
             }
             if (exists($page->{lead_pt}) && $page->{lead_pt}) {
                 my($page_l) = sprintf "\"leading\": %g", $page->{lead_pt};
@@ -964,6 +1006,9 @@ sub report_json ($) {
                     push @ht, json_quote($heading);
                 }
                 push @val, "\"headings\": [" . join(",", @ht) . "]";
+            }
+            if (exists $page->{first_section}) {
+                push @val, "\"fs\": " . $page->{first_section};
             }
         }
 
@@ -993,7 +1038,7 @@ sub report_verbose ($) {
         pdf2in($doc->{textbb}->{rmarg}),
         pdf2in($doc->{textbb}->{top}),
         pdf2in($doc->{textbb}->{bmarg});
-    printf "Body font size: %.2fpt", $doc->{bodyfont_pt};
+    printf "Body font size: %.2fpt", pdf2pt($doc->{bodyfontsize});
     if (p2h_font_bug ($doc)) {
         print " (bogus)";
     }
@@ -1021,7 +1066,9 @@ sub report_verbose ($) {
             pdf2in($left_i), pdf2in($right_i),
             pdf2in($top_i), pdf2in($bot_i);
 
-        printf "  body font: %gpt\n", $page->{bodyfont_pt};
+        if (defined($page->{bodyfontsize})) {
+            printf "  body font: %gpt\n", pdf2pt($page->{bodyfontsize});
+        }
         printf "  leading: %gpt\n", $page->{lead_pt};
         printf "  columns: %d\n", $page->{ncols};
         print  "  type: ", $page->{type}, "\n";
@@ -1058,7 +1105,7 @@ sub report_stats ($) {
             pdf2in($doc->{textbb}->{top}),
             pdf2in($doc->{textbb}->{bmarg}),
             # body font
-            $doc->{bodyfont_pt},
+            pdf2pt($doc->{bodyfontsize}),
             # leading
             $doc->{lead_pt},
             # columns
@@ -1404,13 +1451,17 @@ sub parse_p2h_text ($$$) {
 
     # compute page body font: the font with the most characters
     my ($bodyfontsize) = bodyfontsize(%alens, %tlens);
+    my ($numfontsize) = $bodyfontsize;
+    if (exists($doc->{bodyfontsize}) && $doc->{bodyfontsize} > $numfontsize) {
+        $numfontsize = $doc->{bodyfontsize};
+    }
 
     # compute extent map, using extents larger than the body font
     # plus other extents that aren’t short numbers
     my ($xmap) = xmap_make($pageheight, in2pdf(1/4), in2pdf(1/16));
     my ($ymap) = xmap_make($pagewidth, in2pdf(1/4), in2pdf(1/16));
     foreach my $text (@texts) {
-        if ($text->{sz} > $bodyfontsize || !$text->{num}) {
+        if (!$text->{num} || $text->{sz} > $numfontsize) {
             xmap_add($xmap, $text->{t}, $text->{l}, $text->{w}, $text->{h});
             xmap_add($ymap, $text->{l}, $text->{t}, $text->{h}, $text->{w});
         }
@@ -1455,8 +1506,8 @@ sub parse_p2h_text ($$$) {
         $reffontsize = $bodyfontsize;
         $bodyfontsize = undef;
     }
-    $page->{bodyfont_pt} = pdf2pt($bodyfontsize) if $bodyfontsize;
-    $page->{reffont_pt} = pdf2pt($reffontsize) if $reffontsize;
+    $page->{bodyfontsize} = $bodyfontsize if $bodyfontsize;
+    $page->{reffontsize} = $reffontsize if $reffontsize;
     my($fontsize) = $bodyfontsize ? $bodyfontsize : $reffontsize;
 
     # compute leading using bodyfontsize and column specs
@@ -1516,6 +1567,7 @@ sub parse_p2h_page ($) {
         doc => $doc,
         num => $1,
         pagebb => $pagebb,
+        max_heading_fontsize => 0,
     };
 
     # check for optional fontspecs at start of page
@@ -1557,13 +1609,28 @@ sub merge_page ($$) {
     # initialize doc spec with first page spec
     if ($page->{num} == 1) {
         $doc->{pagebb} = $page->{pagebb};
-        $doc->{bodyfont_pt} = $page->{bodyfont_pt};
         $doc->{ncols} = $page->{ncols};
     }
-    if (exists($page->{bodyfont_pt})) {
-        my($bodyfontsize) = pt2pdf($page->{bodyfont_pt});
-        if (!exists($doc->{max_bodyfontsize}) || $doc->{max_bodyfontsize} < $bodyfontsize) {
-            $doc->{max_bodyfontsize} = $bodyfontsize;
+
+    # update bodyfont, leading
+    if (exists $page->{bodyfontsize}) {
+        my($bfs) = $page->{bodyfontsize};
+        $doc->{bodyfont_counts}->{$bfs} += 1;
+        if (!exists($doc->{bodyfontsize})
+            || $doc->{bodyfontsize} != $bfs) {
+            $doc->{bodyfontsize} = modevalkey($doc->{bodyfont_counts});
+        }
+        if (!exists($doc->{max_bodyfontsize})
+            || $doc->{max_bodyfontsize} < $bfs) {
+            $doc->{max_bodyfontsize} = $bfs;
+        }
+    }
+    if (exists $page->{lead_pt}) {
+        my($l) = $page->{lead_pt};
+        $doc->{lead_counts}->{$l} += 1;
+        if (!exists($doc->{lead_pt})
+            || $doc->{lead_pt} != $l) {
+            $doc->{lead_pt} = modevalkey($doc->{lead_counts});
         }
     }
 }
@@ -1581,10 +1648,13 @@ sub banal_file ($) {
         pages => {},
         headings => {},
         max_numeric_heading => 0,
+        max_section => 0,
         app => '',
         fullpath => $file,
         filename => basename($file),
-        in_references => 0
+        in_references => 0,
+        bodyfont_counts => {},
+        leading_counts => {}
     };
 
     $banal_fullpath = $doc->{fullpath};
@@ -1600,8 +1670,6 @@ sub banal_file ($) {
         merge_page ($doc, $page);
     }
 
-    calc_doc_body_font ($doc);
-    calc_doc_leading ($doc);
     calc_doc_text_region ($doc);
     calc_doc_page_types ($doc);
     calc_doc_columns ($doc);
@@ -1612,6 +1680,17 @@ sub banal_file ($) {
         report_json ($doc);
     } else {
         report_verbose ($doc);
+    }
+}
+
+sub banal_fail ($) {
+    if ($banal_mode eq "json") {
+        printf "{\n";
+        printf "  \"at\": %d,\n", time if !$no_timestamp;
+        printf "  \"args\": %s,\n", json_quote(join(" ", @switches)) if @switches;
+        printf "  \"error\": true,\n";
+        printf "  \"pages\": []\n";
+        printf "}\n";
     }
 }
 
@@ -1746,10 +1825,13 @@ sub main () {
     my $any = 0;
     foreach my $file (@ARGV) {
         # open input file into FILE
-        next unless (banal_open_input ($file));
-        banal_file ($file);
-        close $FILE;
-        $any = 1;
+        if (banal_open_input($file)) {
+            banal_file($file);
+            close $FILE;
+            $any = 1;
+        } else {
+            banal_fail($file);
+        }
     }
     return 1 - $any;
 }

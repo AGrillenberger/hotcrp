@@ -1,5 +1,5 @@
 // graph.js -- HotCRP JavaScript library for graph drawing
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 hotcrp.graph = (function ($, d3) {
 var handle_ui = hotcrp.handle_ui,
@@ -301,16 +301,24 @@ function seq_to_cdf(seq, flip, raw) {
 }
 
 
-function expand_extent(e, is_y) {
-    if (e[0] > 0 && e[0] < e[1] / 11)
-        e[0] = 0;
-    if (e[1] - e[0] < 10) {
-        var delta = Math.min(1, e[1] - e[0]) * 0.2;
-        if (!is_y || e[0])
-            e[0] -= delta;
-        e[1] += delta;
+function expand_extent(e, args) {
+    var l = e[0], h = e[1], delta;
+    if (l > 0 && l < h / 11) {
+        l = 0;
+    } else if (l > 0 && args.discrete) {
+        l -= 0.5;
     }
-    return e;
+    if (h - l < 10) {
+        delta = Math.min(1, h - l) * 0.2;
+        if (args.orientation !== "y" || l > 0) {
+            l -= delta;
+        }
+        h += delta;
+    }
+    if (args.discrete) {
+        h += 0.5;
+    }
+    return [l, h];
 }
 
 
@@ -334,6 +342,14 @@ function make_axes(svg, xAxis, yAxis, args) {
         .call(axisLabelStyles)
         .text(args.x.label || "");
 
+    args.x.discrete && svg.select(".x.axis .domain").each(function () {
+        var d = this.getAttribute("d");
+        this.setAttribute("d", d.replace(/^M([^A-Z]*),([^A-Z]*)V0H([^A-Z]*)V([^A-Z]*)$/,
+            function (m, x1, y1, x2, y2) {
+                return y1 === y2 ? "M".concat(x1, ",0H", x2) : m;
+            }));
+    });
+
     svg.append("g")
         .attr("class", "y axis")
         .call(yAxis)
@@ -346,6 +362,14 @@ function make_axes(svg, xAxis, yAxis, args) {
         .attr("y", 6).attr("dy", ".71em")
         .call(axisLabelStyles)
         .text(args.y.label || "");
+
+    args.y.discrete && svg.select(".y.axis .domain").each(function () {
+        var d = this.getAttribute("d");
+        this.setAttribute("d", d.replace(/^M([^A-Z]*),([^A-Z]*)H0V([^A-Z]*)H([^A-Z]*)$/,
+            function (m, x1, y1, y2, x2) {
+                return x1 === x2 ? "M0,".concat(y1, "V", y2) : m;
+            }));
+    });
 
     args.x.ticks.rewrite.call(svg.select(".x.axis"), svg);
     args.y.ticks.rewrite.call(svg.select(".y.axis"), svg);
@@ -441,7 +465,7 @@ function make_reviewer_clicker(email) {
 
 function clicker_go(url, event) {
     if (event && event.metaKey)
-        window.open(url, "_blank");
+        window.open(url, "_blank", "noopener");
     else
         window.location = url;
 }
@@ -638,7 +662,7 @@ function procrastination_filter(revdata) {
             if (u.email)
                 d.click = make_reviewer_clicker(u.email);
         }
-        if (cid && cid == siteinfo.user.cid) {
+        if (cid && cid == siteinfo.user.uid) {
             d.className = "gcdf-highlight";
             d.priority = 1;
         } else if (u && u.light)
@@ -861,8 +885,14 @@ function scatter_create(svg, data, klass) {
 }
 
 function scatter_highlight(svg, data, klass) {
-    if (!$$("svggpat_dot_highlight"))
-        $("div.body").prepend('<svg width="0" height="0" style="position:absolute"><defs><radialGradient id="svggpat_dot_highlight"><stop offset="50%" stop-opacity="0" /><stop offset="50%" stop-color="#ffff00" stop-opacity="0.5" /><stop offset="100%" stop-color="#ffff00" stop-opacity="0" /></radialGradient></defs></svg>');
+    if (!$$("svggpat_dot_highlight")) {
+        $$("p-body").prepend(svge("svg", "width", 0, "height", 0, "class", "position-absolute",
+            svge("defs",
+                svge("radialGradient", "id", "svggpat_dot_highlight",
+                    svge("stop", "offset", "50%", "stop-opacity", "0"),
+                    svge("stop", "offset", "50%", "stop-color", "#ffff00", "stop-opacity", "0.5"),
+                    svge("stop", "offset", "100%", "stop-color", "#ffff00", "stop-opacity", "0")))));
+    }
 
     var sel = svg.selectAll(".ghighlight");
     if (klass)
@@ -911,8 +941,8 @@ function graph_scatter(selector, args) {
         ye = d3.extent(data, proj1),
         x = d3.scaleLinear().range(args.x.flip ? [args.width, 0] : [0, args.width]),
         y = d3.scaleLinear().range(args.y.flip ? [0, args.height] : [args.height, 0]);
-    axis_domain(x, args.x.extent, expand_extent(xe));
-    axis_domain(y, args.y.extent, expand_extent(ye, true));
+    axis_domain(x, args.x.extent, expand_extent(xe, args.x));
+    axis_domain(y, args.y.extent, expand_extent(ye, args.y));
 
     var xAxis = d3.axisBottom(x);
     args.x.ticks.prepare.call(xAxis, xe, x.range());
@@ -1025,29 +1055,34 @@ function data_to_barchart(data, yaxis) {
             || (a[3] || "").localeCompare(b[3] || "");
     });
 
-    var i, maxy;
+    var i, maxy, cur, last, ndata = [];
     for (i = 0; i != data.length; ++i) {
-        if (i && data[i-1][0] == data[i][0] && data[i-1][4] == data[i][4]) {
-            data[i].yoff = data[i-1].yoff + data[i-1][1];
-            if (data[i-1].i0 == null)
-                data[i-1].i0 = i - 1;
-            data[i].i0 = data[i-1].i0;
+        cur = data[i];
+        if (cur[1] == null) {
+            continue;
+        }
+        ndata.push(cur);
+        if (last && cur[0] == last[0] && cur[4] == last[4]) {
+            cur.yoff = last.yoff + last[1];
+            if (last.i0 == null)
+                last.i0 = ndata.length - 1;
+            cur.i0 = last.i0;
         } else {
-            data[i].yoff = 0;
+            cur.yoff = 0;
         }
     }
 
-    if (yaxis.fraction && data.some(function (d) { return d[4] != data[0][4]; })) {
+    if (yaxis.fraction && ndata.some(function (d) { return d[4] != data[0][4]; })) {
         maxy = {};
-        data.forEach(function (d) { maxy[d[0]] = d[1] + d.yoff; });
-        data.forEach(function (d) { d.yoff /= maxy[d[0]]; d[1] /= maxy[d[0]]; });
+        ndata.forEach(function (d) { maxy[d[0]] = d[1] + d.yoff; });
+        ndata.forEach(function (d) { d.yoff /= maxy[d[0]]; d[1] /= maxy[d[0]]; });
     } else if (yaxis.fraction) {
         maxy = 0;
-        data.forEach(function (d) { maxy += d[1]; });
-        data.forEach(function (d) { d.yoff /= maxy; d[1] /= maxy; });
+        ndata.forEach(function (d) { maxy += d[1]; });
+        ndata.forEach(function (d) { d.yoff /= maxy; d[1] /= maxy; });
     }
 
-    return data;
+    return ndata;
 }
 
 function graph_bars(selector, args) {
@@ -1065,7 +1100,7 @@ function graph_bars(selector, args) {
         }),
         x = d3.scaleLinear().range(args.x.flip ? [args.width, 0] : [0, args.width]),
         y = d3.scaleLinear().range(args.y.flip ? [0, args.height] : [args.height, 0]);
-    axis_domain(x, args.x.extent, expand_extent(xe));
+    axis_domain(x, args.x.extent, expand_extent(xe, args.x));
     axis_domain(y, args.y.extent, ye);
 
     var dpr = window.devicePixelRatio || 1;
@@ -1213,8 +1248,8 @@ function graph_boxplot(selector, args) {
         }),
         x = d3.scaleLinear().range(args.x.flip ? [args.width, 0] : [0, args.width]),
         y = d3.scaleLinear().range(args.y.flip ? [0, args.height] : [args.height, 0]);
-    axis_domain(x, args.x.extent, expand_extent(xe));
-    axis_domain(y, args.y.extent, expand_extent(ye, true));
+    axis_domain(x, args.x.extent, expand_extent(xe, args.x));
+    axis_domain(y, args.y.extent, expand_extent(ye, args.y));
 
     var barwidth = args.width/80;
     if (deltae[0] != Infinity)
@@ -1446,13 +1481,13 @@ function score_ticks(rf) {
         rewrite: function () {
             this.selectAll("g.tick text").each(function () {
                 var d = d3.select(this), value = +d.text();
-                d.attr("fill", rf.rgb(value));
+                d.attr("fill", rf.color(value));
                 if (!rf.default_numeric && value)
                     d.text(rf.unparse_symbol(value, split));
             });
         },
         unparse_html: function (value, include_numeric) {
-            var k = rf.className(value), t = rf.unparse_symbol(value, split);
+            var k = rf.className(value), t = rf.unparse_symbol(value, true);
             if (!k)
                 return t;
             t = '<span class="sv '.concat(k, '">', t, '</span>');
@@ -1648,9 +1683,11 @@ var graphers = {
     procrastination: {filter: true, function: procrastination_filter},
     scatter: {function: graph_scatter},
     cdf: {function: graph_cdf},
-    "cumulative-count": {function: graph_cdf},
+    "cumulative-count": {function: graph_cdf}, /* XXX backward compat */
+    cumulative_count: {function: graph_cdf},
     bar: {function: graph_bars},
-    "full-stack": {function: graph_bars},
+    "full-stack": {function: graph_bars}, /* XXX backward compat */
+    full_stack: {function: graph_bars},
     box: {function: graph_boxplot}
 };
 

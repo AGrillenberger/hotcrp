@@ -1,6 +1,6 @@
 <?php
 // t_unit.php -- HotCRP tests
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class Unit_Tester {
     /** @var Conf
@@ -9,6 +9,11 @@ class Unit_Tester {
 
     function __construct(Conf $conf) {
         $this->conf = $conf;
+    }
+
+    function test_xassert_nan() {
+        xassert_eqq(NAN, NAN);
+        xassert_in_eqq(NAN, [NAN]);
     }
 
     function test_dbl_format_query() {
@@ -70,17 +75,17 @@ class Unit_Tester {
         xassert_eqq(Dbl::fetch_ivalue("select ? like cast('?ls' as binary) from dual", "xx", "%x"), 0);
     }
 
-    function test_dbl_compare_and_swap() {
+    function test_dbl_compare_exchange() {
         Dbl::qe("delete from Settings where name='cmpxchg'");
         Dbl::qe("insert into Settings set name='cmpxchg', value=1");
         xassert_eqq(Dbl::fetch_ivalue("select value from Settings where name='cmpxchg'"), 1);
-        xassert_eqq(Dbl::compare_and_swap(Dbl::$default_dblink,
+        xassert_eqq(Dbl::compare_exchange(Dbl::$default_dblink,
                                           "select value from Settings where name=?", ["cmpxchg"],
                                           function ($x) { return (int) $x + 1; },
                                           "update Settings set value=?{desired} where name=? and value=?{expected}", ["cmpxchg"]),
                     2);
         xassert_eqq(Dbl::fetch_ivalue("select value from Settings where name='cmpxchg'"), 2);
-        xassert_eqq(Dbl::compare_and_swap(Dbl::$default_dblink,
+        xassert_eqq(Dbl::compare_exchange(Dbl::$default_dblink,
                                           "select value from Settings where name=?", ["cmpxchg"],
                                           function ($x) { return (int) $x + 1; },
                                           "update Settings set value?{desired}e where name=? and value?{expected}e", ["cmpxchg"]),
@@ -107,21 +112,26 @@ class Unit_Tester {
         $paper1 = $user_chair->checked_paper_by_id(1);
         $doc = $paper1->document(DTYPE_SUBMISSION);
         xassert(!!$doc);
-        xassert_eqq($doc->metadata(), null);
+        xassert_eqq((array) $doc->metadata(), []);
 
-        xassert($doc->update_metadata(["hello" => 1]));
+        $doc->set_prop("hello", 1);
+        xassert($doc->save_prop());
         xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
                     '{"hello":1}');
 
-        xassert($doc->update_metadata(["hello" => 2, "foo" => "bar"]));
+        $doc->set_prop("hello", 2);
+        $doc->set_prop("foo", "bar");
+        xassert($doc->save_prop());
         xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
                     '{"hello":2,"foo":"bar"}');
 
-        xassert($doc->update_metadata(["hello" => null]));
+        $doc->set_prop("hello", null);
+        xassert($doc->save_prop());
         xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
                     '{"foo":"bar"}');
 
-        xassert(!$doc->update_metadata(["too_long" => str_repeat("!", 32768)], true));
+        $doc->set_prop("too_long", str_repeat("!", 32768));
+        xassert(!$doc->save_prop(true));
         xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
                     '{"foo":"bar"}');
 
@@ -349,19 +359,127 @@ class Unit_Tester {
         xassert_eqq($jpp->vpos1, 0);
         xassert_eqq($jpp->vpos2, strlen($input));
 
-        xassert_eqq(JsonParser::potential_string_includes_last("\"", 1), false);
-        xassert_eqq(JsonParser::potential_string_includes_last("\"\"", 1), false);
-        xassert_eqq(JsonParser::potential_string_includes_last("\"\\\"", 1), true);
-        xassert_eqq(JsonParser::potential_string_includes_last("\"\\\\\"", 1), false);
-        xassert_eqq(JsonParser::potential_string_includes_last("\"\\\n", 1), false);
-        xassert_eqq(JsonParser::potential_string_includes_last("\"\\x", 1), true);
-
         xassert_eqq(JsonParser::path_push(null, 0), "\$[0]");
         xassert_eqq(JsonParser::path_push(null, "0"), "\$[0]");
         xassert_eqq(JsonParser::path_push(null, ""), "\$[\"\"]");
         xassert_eqq(JsonParser::path_push("\$[0]", "a"), "\$[0].a");
         xassert_eqq(JsonParser::path_push("\$[0]", "a\\"), "\$[0][\"a\\\\\"]");
         xassert_eqq(JsonParser::path_push("\$[0]", "\n"), "\$[0][\"\\n\"]");
+    }
+
+    function test_json5() {
+        $jp = (new JsonParser)->assoc(true);
+        $jp5 = (new JsonParser)->assoc(true)->flags(JsonParser::JSON5);
+
+        xassert_eqq($jp->input("[\"a\"]")->decode(), ["a"]);
+        xassert($jp->ok());
+        xassert_eqq($jp5->input("[\"a\"]")->decode(), ["a"]);
+        xassert($jp5->ok());
+        xassert_eqq($jp->input("[\"a\",]")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("[\"a\",]")->decode(), ["a"]);
+        xassert($jp5->ok());
+        xassert_eqq($jp->input("[,]")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("[,]")->decode(), null);
+        xassert(!$jp5->ok());
+
+        xassert_eqq($jp->input("{\"a\":1}")->decode(), ["a" => 1]);
+        xassert($jp->ok());
+        xassert_eqq($jp5->input("{\"a\":1}")->decode(), ["a" => 1]);
+        xassert($jp5->ok());
+        xassert_eqq($jp->input("{\"a\":1,}")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("{\"a\":1,}")->decode(), ["a" => 1]);
+        xassert($jp5->ok());
+        xassert_eqq($jp->input("{\"b\",\"a\":1}")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("{\"b\",\"a\":1}")->decode(), null);
+        xassert(!$jp5->ok());
+        xassert_eqq($jp->input("{,}")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("{,}")->decode(), null);
+        xassert(!$jp5->ok());
+
+        xassert_eqq($jp->input("0x1A")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("0x1A")->decode(), 26);
+        xassert($jp5->ok());
+        xassert_eqq($jp->input("+12")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("+12")->decode(), 12);
+        xassert($jp5->ok());
+
+        xassert_eqq($jp->input("Infinity")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("Infinity")->decode(), INF);
+        xassert($jp5->ok());
+
+        xassert_eqq($jp->input("NaN")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("NaN")->decode(), NAN);
+        xassert($jp5->ok());
+
+        xassert_eqq($jp->input("// Comment\ntrue\n/* Yep */")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp5->input("// Comment\ntrue\n/* Yep */")->decode(), true);
+        xassert($jp5->ok());
+
+        xassert_eqq($jp5->input("'Hello.\t'")->decode(), "Hello.\t");
+        xassert($jp5->ok());
+        xassert_eqq($jp5->input("'Hello.\n'")->decode(), null);
+        xassert(!$jp5->ok());
+        xassert_eqq($jp5->input("'Hello.\\\n'")->decode(), "Hello.");
+        xassert($jp5->ok());
+        xassert_eqq($jp5->input("'Hello.\\\n\"'")->decode(), "Hello.\"");
+        xassert($jp5->ok());
+        xassert_eqq($jp5->input("\"Hello.\t'")->decode(), null);
+        xassert(!$jp5->ok());
+        xassert_eqq($jp5->input("\"Hello.\t\"")->decode(), "Hello.\t");
+        xassert($jp5->ok());
+        xassert_eqq($jp5->input("\"Hello.\n\"")->decode(), null);
+        xassert(!$jp5->ok());
+        xassert_eqq($jp5->input("\"Hello.\\\n\"")->decode(), "Hello.");
+        xassert($jp5->ok());
+        xassert_eqq($jp5->input("\"Hello.\\\n'\"")->decode(), "Hello.'");
+        xassert($jp5->ok());
+
+        xassert_eqq($jp->input("\"Hello.\t'")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp->input("\"Hello.\t\"")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp->input("\"Hello.\n\"")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp->input("\"Hello.\\\n\"")->decode(), null);
+        xassert(!$jp->ok());
+        xassert_eqq($jp->input("\"Hello.\\\n'\"")->decode(), null);
+        xassert(!$jp->ok());
+
+        xassert_eqq($jp5->input("{a:1}")->decode(), ["a" => 1]);
+        xassert($jp5->ok());
+        xassert_eqq($jp->input("{a:1}")->decode(), null);
+        xassert(!$jp->ok());
+    }
+
+    /** @param JsonParser $jp
+     * @param string $input
+     * @return list<JsonParserPosition> */
+    private function get_member_positions($jp, $input) {
+        $jpps = [];
+        foreach ($jp->input($input)->member_positions(0) as $jpp) {
+            $jpps[] = $jpp;
+        }
+        return $jpps;
+    }
+
+    function test_json_member_positions() {
+        $jp = new JsonParser;
+        xassert_eqq(json_encode($this->get_member_positions($jp, "    null ")),
+                    '[[null,null,null,4,8]]');
+        xassert_eqq(json_encode($this->get_member_positions($jp, "[  1   ,\n\n3,4] ")),
+                    '[[0,null,null,3,4],[1,null,null,10,11],[2,null,null,12,13]]');
+        xassert_eqq(json_encode($this->get_member_positions($jp, "{    \"a\": {\"b\":\"c\",\"d\":1001010101010101} } ")),
+                    '[["a",5,8,10,40]]');
     }
 
     function test_object_replace_recursive() {
@@ -384,6 +502,10 @@ class Unit_Tester {
     function test_json_object_replace_recursive() {
         xassert_eqq(json_object_replace_recursive(null, ["a" => 1]), '{"a":1}');
         xassert_eqq(json_object_replace_recursive('{"a":1}', (object) ["a" => 2]), '{"a":2}');
+        xassert_eqq(json_object_replace_recursive('{"a":1}', (object) ["b" => 2]), '{"a":1,"b":2}');
+        xassert_eqq(json_object_replace_recursive('{"a":1}', (object) ["b" => 2, OBJECT_REPLACE_NO_RECURSE => true]), '{"b":2}');
+        xassert_eqq(json_object_replace_recursive('{"a":1}', (object) ["b" => 2, OBJECT_REPLACE_NO_RECURSE => false]), '{"a":1,"b":2}');
+        xassert_eqq(json_object_replace_recursive('{"a":1,"b":{"x":1},"c":{"y":1}}', (object) ["b" => ["y" => 2], "c" => [OBJECT_REPLACE_NO_RECURSE => true]]), '{"a":1,"b":{"x":1,"y":2},"c":{}}');
         xassert_eqq(json_object_replace_recursive('{"a":1}', ["a" => 2]), '{"a":2}');
         xassert_eqq(json_object_replace_recursive('{"a":1}', ["a" => null]), null);
     }
@@ -408,7 +530,9 @@ class Unit_Tester {
         xassert_eqq(json_decode("[1,2,3-4,5,6-10,11]"), null);
 
         xassert_eqq(SessionList::decode_ids("[1-2]"), [1,2]);
+        xassert_eqq(SessionList::decode_ids("1 2"), [1,2]);
         xassert_eqq(SessionList::decode_ids("[1,2,3-4,5,6-10,11]"), [1,2,3,4,5,6,7,8,9,10,11]);
+        xassert_eqq(SessionList::decode_ids("1 2 3 4 5 6 7 8 9 10 11"), [1,2,3,4,5,6,7,8,9,10,11]);
         xassert_eqq(SessionList::decode_ids(SessionList::encode_ids([1,2])), [1,2]);
         xassert_eqq(SessionList::decode_ids(SessionList::encode_ids([1,2,3,4,5,6,7,8,9,10,11])), [1,2,3,4,5,6,7,8,9,10,11]);
         xassert_eqq(SessionList::decode_ids(SessionList::encode_ids([1,3,5,7,9,10,11])), [1,3,5,7,9,10,11]);
@@ -465,37 +589,104 @@ class Unit_Tester {
     }
 
     function test_obscure_time() {
-        $t = $this->conf->parse_time("1 Sep 2010 00:00:01");
+        $t = $this->conf->parse_time("Sep 1, 2010 00:00:01");
         $t0 = $this->conf->obscure_time($t);
-        xassert_eqq($this->conf->unparse_time_obscure($t0), "1 Sep 2010");
-        xassert_eqq($this->conf->unparse_time($t0), "1 Sep 2010 12pm EDT");
+        xassert_eqq($this->conf->unparse_time_obscure($t0), "Sep 1, 2010");
+        xassert_eqq($this->conf->unparse_time($t0), "Sep 1, 2010, 12 PM EDT");
 
-        $t = $this->conf->parse_time("1 Sep 2010 23:59:59");
+        $t = $this->conf->parse_time("Sep 1, 2010 23:59:59");
         $t0 = $this->conf->obscure_time($t);
-        xassert_eqq($this->conf->unparse_time_obscure($t0), "1 Sep 2010");
-        xassert_eqq($this->conf->unparse_time($t0), "1 Sep 2010 12pm EDT");
+        xassert_eqq($this->conf->unparse_time_obscure($t0), "Sep 1, 2010");
+        xassert_eqq($this->conf->unparse_time($t0), "Sep 1, 2010, 12 PM EDT");
     }
 
     function test_timezones() {
         $t = $this->conf->parse_time("29 May 2018 11:00:00 EDT");
         xassert_eqq($t, 1527606000);
-        $t = $this->conf->parse_time("29 May 2018 03:00:00 AoE");
+        $t = $this->conf->parse_time("May 29, 2018 11:00:00 EDT");
+        xassert_eqq($t, 1527606000);
+        $t = $this->conf->parse_time("May 29, 2018 03:00:00 AoE");
         xassert_eqq($t, 1527606000);
         $this->conf->set_opt("timezone", "Etc/GMT+12");
         $this->conf->refresh_options();
         $this->conf->refresh_globals();
-        $t = $this->conf->parse_time("29 May 2018 03:00:00");
+        $t = $this->conf->parse_time("May 29, 2018 03:00:00");
         xassert_eqq($t, 1527606000);
         $t = $this->conf->unparse_time(1527606000);
-        xassert_eqq($t, "29 May 2018 3am AoE");
-        $t = $this->conf->parse_time("29 May 2018 23:59:59 AoE");
+        xassert_eqq($t, "May 29, 2018, 3 AM AoE");
+        $t = $this->conf->parse_time("May 29, 2018, 23:59:59 AoE");
+        xassert_eqq($t, 1527681599);
+        $t = $this->conf->parse_time("May 29, 2018 AoE");
         xassert_eqq($t, 1527681599);
         $t = $this->conf->parse_time("29 May 2018 AoE");
         xassert_eqq($t, 1527681599);
+        $t = $this->conf->parse_time("May 29, 2018 12 AM AoE");
+        xassert_eqq($t, 1527595200);
+        $t = $this->conf->parse_time("May 29, 2018 12am AoE");
+        xassert_eqq($t, 1527595200);
+        $t = $this->conf->parse_time("29 May 2018 12 AM AoE");
+        xassert_eqq($t, 1527595200);
         $t = $this->conf->parse_time("29 May 2018 12am AoE");
         xassert_eqq($t, 1527595200);
+        $t = $this->conf->parse_time("May 29 AoE", 1527606000);
+        xassert_eqq($t, 1527681599);
         $t = $this->conf->parse_time("29 May AoE", 1527606000);
         xassert_eqq($t, 1527681599);
+    }
+
+    function test_tagger_checks() {
+        $tagger = new Tagger($this->conf->site_contact());
+        xassert_eqq($tagger->check("none", 0), false);
+        xassert_eqq($tagger->check("any", 0), false);
+        xassert_eqq($tagger->check("undefined", 0), false);
+        xassert_eqq($tagger->check("none", Tagger::ALLOWRESERVED), "none");
+        xassert_eqq($tagger->check("any", Tagger::ALLOWRESERVED), "any");
+        xassert_eqq($tagger->check("undefined", Tagger::ALLOWRESERVED), "undefined");
+        xassert_eqq($tagger->check("~none", 0), false);
+        xassert_eqq($tagger->check("~any", 0), false);
+        xassert_eqq($tagger->check("~undefined", 0), false);
+        xassert_eqq($tagger->check("~~none", 0), false);
+        xassert_eqq($tagger->check("~~any", 0), false);
+        xassert_eqq($tagger->check("~~undefined", 0), false);
+        xassert_eqq($tagger->check("hello", 0), "hello");
+        xassert_eqq($tagger->check("hello#0", 0), "hello#0");
+        xassert_eqq($tagger->check("~hello", 0), "~hello");
+        xassert_eqq($tagger->check("~hello#0", 0), "~hello#0");
+        xassert_eqq($tagger->check("~~hello", 0), "~~hello");
+        xassert_eqq($tagger->check("~~hello#0", 0), "~~hello#0");
+        xassert_eqq($tagger->check("hello", Tagger::NOVALUE), "hello");
+        xassert_eqq($tagger->check("hello#0", Tagger::NOVALUE), false);
+        xassert_eqq($tagger->check("~hello", Tagger::NOVALUE), "~hello");
+        xassert_eqq($tagger->check("~hello#0", Tagger::NOVALUE), false);
+        xassert_eqq($tagger->check("~~hello", Tagger::NOVALUE), "~~hello");
+        xassert_eqq($tagger->check("~~hello#0", Tagger::NOVALUE), false);
+        xassert_eqq($tagger->check("hello", Tagger::NOPRIVATE), "hello");
+        xassert_eqq($tagger->check("hello#0", Tagger::NOPRIVATE), "hello#0");
+        xassert_eqq($tagger->check("~hello", Tagger::NOPRIVATE), false);
+        xassert_eqq($tagger->check("~hello#0", Tagger::NOPRIVATE), false);
+        xassert_eqq($tagger->check("~~hello", Tagger::NOPRIVATE), "~~hello");
+        xassert_eqq($tagger->check("~~hello#0", Tagger::NOPRIVATE), "~~hello#0");
+        xassert_eqq($tagger->check("hello", Tagger::NOCHAIR), "hello");
+        xassert_eqq($tagger->check("hello#0", Tagger::NOCHAIR), "hello#0");
+        xassert_eqq($tagger->check("~hello", Tagger::NOCHAIR), "~hello");
+        xassert_eqq($tagger->check("~hello#0", Tagger::NOCHAIR), "~hello#0");
+        xassert_eqq($tagger->check("~~hello", Tagger::NOCHAIR), false);
+        xassert_eqq($tagger->check("~~hello#0", Tagger::NOCHAIR), false);
+    }
+
+    function test_ordinal() {
+        xassert_eqq(ordinal(0), "0th");
+        xassert_eqq(ordinal(1), "1st");
+        xassert_eqq(ordinal(2), "2nd");
+        xassert_eqq(ordinal(3), "3rd");
+        xassert_eqq(ordinal(4), "4th");
+        xassert_eqq(ordinal(10), "10th");
+        xassert_eqq(ordinal(11), "11th");
+        xassert_eqq(ordinal(20), "20th");
+        xassert_eqq(ordinal(21), "21st");
+        xassert_eqq(ordinal(100), "100th");
+        xassert_eqq(ordinal(101), "101st");
+        xassert_eqq(ordinal(-1), "-1st");
     }
 
     function test_review_ordinals() {
@@ -691,7 +882,8 @@ class Unit_Tester {
         xassert_eqq(UnicodeHelper::deaccent("Á é î ç ø U"), "A e i c o U");
         $do = UnicodeHelper::deaccent_offsets("Á é î ç ø U .\xE2\x84\xAA");
         xassert_eqq($do[0], "A e i c o U .K");
-        xassert_eqq(json_encode($do[1]), "[[0,0],[1,2],[3,5],[5,8],[7,11],[9,14],[14,21]]");
+        xassert_eqq(json_encode($do[1]), "[0,0,1,2,3,5,5,8,7,11,9,14,14,21]");
+        xassert_eqq(UnicodeHelper::deaccent_translate_offset($do[1], 4), 6);
         $regex = new TextPregexes(Text::word_regex("foo"), Text::utf8_word_regex("foo"));
         xassert_eqq(Text::highlight("Is foo bar føo bar fóó bar highlit right? foö", $regex),
                     "Is <span class=\"match\">foo</span> bar <span class=\"match\">føo</span> bar <span class=\"match\">fóó</span> bar highlit right? <span class=\"match\">foö</span>");
@@ -807,8 +999,8 @@ class Unit_Tester {
     }
 
     function test_sensitive_mail_preparation() {
-        $prep1 = new MailPreparation($this->conf, Author::make_email("ass@butt.com"));
-        $prep2 = new MailPreparation($this->conf, Author::make_email("ass@example.edu"));
+        $prep1 = new MailPreparation($this->conf, Contact::make_email($this->conf, "ass@butt.com"));
+        $prep2 = new MailPreparation($this->conf, Contact::make_email($this->conf, "ass@example.edu"));
         $prep1->sensitive = $prep2->sensitive = true;
         xassert(!$this->conf->opt("sendEmail") && $this->conf->opt("debugShowSensitiveEmail"));
         $this->conf->set_opt("sendEmail", true);
@@ -867,6 +1059,25 @@ class Unit_Tester {
         xassert_eqq($mailer->expand("%OTHERNAME%", "to"), "");
         xassert_eqq($mailer->expand("%OTHERCONTACT%"), "noname@c.com\n");
         xassert_eqq($mailer->expand("%OTHERCONTACT%", "to"), "noname@c.com");
+
+        xassert_eqq($mailer->expand(" %IF(NULL)%A%ELSE%Y%ENDIF%"), " Y\n");
+        xassert_eqq($mailer->expand(" %IF(CONFLONGNAME)%A%ELSE%Y%ENDIF%"), " A\n");
+        xassert_eqq($mailer->expand(" {{IF(NULL)}}A{{ELSE}}Y{{ENDIF}}"), " Y\n");
+        xassert_eqq($mailer->expand(" {{IF(UNKNOWN)}}A{{ELSE}}Y{{ENDIF}}"), " {{IF(UNKNOWN)}}A{{ELSE}}Y{{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(UNKNOWN)}}A{{ELIF(NULL)}}Y{{ENDIF}}"), " {{IF(UNKNOWN)}}A{{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(CONFLONGNAME)}}A{{ELIF(UNKNOWN)}}Y{{ENDIF}}"), " A\n");
+        xassert_eqq($mailer->expand(" {{IF(UNKNOWN)}}A{{ELIF(CONFLONGNAME)}}Y{{ELIF(BOO)}}Z{{ENDIF}}"), " {{IF(UNKNOWN)}}A{{ELSE}}Y{{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(CONFLONGNAME)}}{{IF(UNKNOWN)}}A{{ELSE}}B{{ENDIF}}{{ELIF(UNKNOWN)}}Y{{ENDIF}}"), " {{IF(UNKNOWN)}}A{{ELSE}}B{{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(UNKNOWN)}}{{IF(CONFLONGNAME)}}A{{ELSE}}B{{ENDIF}}{{ELIF(UNKNOWN2)}}Y{{ENDIF}}"), " {{IF(UNKNOWN)}}A{{ELIF(UNKNOWN2)}}Y{{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(UNKNOWN)}} a {{ELIF(NULL)}} b {{ELIF(NULL)}} c {{ELSE}} d {{ENDIF}} "),
+            " {{IF(UNKNOWN)}} a {{ELSE}} d {{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(UNKNOWN)}} a {{ELIF(NULL)}} b {{ELIF(NULL)}} c {{ENDIF}} "),
+            " {{IF(UNKNOWN)}} a {{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" {{IF(NULL)}}A{{ELIF(UNKNOWN)}}Y{{ENDIF}}"), " {{IF(UNKNOWN)}}Y{{ENDIF}}\n");
+        xassert_eqq($mailer->expand(" %IF(NULL)%A%ELIF(UNKNOWN)%Y%ENDIF%"), " %IF(UNKNOWN)%Y%ENDIF%\n");
+        xassert_eqq($mailer->expand(" %IF(NULL)%A%ELIF(UNKNOWN)%Y"), " %IF(UNKNOWN)%Y%ENDIF%\n");
+        xassert_eqq($mailer->expand("Hello\n%IF(CONFLONGNAME)%\nHello\n\n%ENDIF%\n\nGoodbye\n"),
+            "Hello\nHello\n\nGoodbye\n");
     }
 
     function test_collator() {
@@ -923,6 +1134,7 @@ class Unit_Tester {
         xassert_eqq((Text::split_name("C. Von La Le Goues"))[1], "Von La Le Goues");
         xassert_eqq(Text::analyze_von("Von Le Goues"), null);
         xassert_eqq(Text::analyze_von("von le Goues"), ["von le", "Goues"]);
+        xassert_eqq((Text::split_name("Amir Al Sadi"))[1], "Al Sadi");
     }
 
     function test_prefix_suffix() {
@@ -951,20 +1163,25 @@ class Unit_Tester {
         foreach (["1,2,3,4,5", "1,2,3,5,5", "3,5,5", "3,3,5,5", "2,3,3,5,5"] as $st) {
             $s[] = new ScoreInfo($st);
         }
-        xassert($s[0]->compare_by($s[0], "C") == 0);
-        xassert($s[0]->compare_by($s[1], "C") < 0);
-        xassert($s[0]->compare_by($s[2], "C") < 0);
-        xassert($s[0]->compare_by($s[3], "C") < 0);
-        xassert($s[1]->compare_by($s[1], "C") == 0);
-        xassert($s[1]->compare_by($s[2], "C") < 0);
-        xassert($s[1]->compare_by($s[3], "C") < 0);
-        xassert($s[2]->compare_by($s[2], "C") == 0);
-        xassert($s[2]->compare_by($s[3], "C") < 0);
-        xassert($s[3]->compare_by($s[0], "C") > 0);
-        xassert($s[3]->compare_by($s[1], "C") > 0);
-        xassert($s[3]->compare_by($s[2], "C") > 0);
-        xassert($s[3]->compare_by($s[3], "C") == 0);
-        xassert($s[3]->compare_by($s[4], "C") > 0);
+        xassert($s[0]->compare_by($s[0], "counts") == 0);
+        xassert($s[0]->compare_by($s[1], "counts") < 0);
+        xassert($s[0]->compare_by($s[2], "counts") < 0);
+        xassert($s[0]->compare_by($s[3], "counts") < 0);
+        xassert($s[1]->compare_by($s[1], "counts") == 0);
+        xassert($s[1]->compare_by($s[2], "counts") < 0);
+        xassert($s[1]->compare_by($s[3], "counts") < 0);
+        xassert($s[2]->compare_by($s[2], "counts") == 0);
+        xassert($s[2]->compare_by($s[3], "counts") < 0);
+        xassert($s[3]->compare_by($s[0], "counts") > 0);
+        xassert($s[3]->compare_by($s[1], "counts") > 0);
+        xassert($s[3]->compare_by($s[2], "counts") > 0);
+        xassert($s[3]->compare_by($s[3], "counts") == 0);
+        xassert($s[3]->compare_by($s[4], "counts") > 0);
+
+        xassert_eqq(ScoreInfo::parse_score_sort("avg"), "average");
+        xassert_eqq(ScoreInfo::parse_score_sort("A"), "average");
+        xassert_eqq(ScoreInfo::parse_score_sort("myscore"), "my");
+        xassert_eqq(ScoreInfo::parse_score_sort("C"), "counts");
     }
 
     function test_qreq_make_url() {
@@ -995,7 +1212,7 @@ class Unit_Tester {
     function test_ftext() {
         xassert_eqq(Ftext::parse("< 0><hello"), [null, "< 0><hello"]);
         xassert_eqq(Ftext::parse("<0><hello"), [0, "<hello"]);
-        xassert_eqq(Ftext::unparse_as("<0><hello>", 5), "&lt;hello&gt;");
+        xassert_eqq(Ftext::as(5, "<0><hello>"), "&lt;hello&gt;");
         xassert_eqq(Ftext::concat("<0><hello>", "<5>?"), "<5>&lt;hello&gt;?");
         xassert_eqq(Ftext::concat("<hello>", "?"), "<hello>?");
         xassert_eqq(Ftext::concat("<0><hello>", "?"), "<0><hello>?");
@@ -1043,6 +1260,14 @@ class Unit_Tester {
         xassert_eqq(json_encode($ts->as_array()), '{"3":"Fudge","9":"Fudge: All of them","5":"Fudge: Opening","4":"Fudge: Packing","7":"Fudge: Really","10":"Fudge:Questions","6":"Fudge: Others","8":"Fudgey","1":"None of the above","2":"Other"}');
     }
 
+    static function getopt_parse($getopt, $argv) {
+        try {
+            return $getopt->parse($argv);
+        } catch (CommandLineException $ex) {
+            return $ex->getMessage();
+        }
+    }
+
     function test_getopt() {
         $arg = (new Getopt)->long("a", "ano", "b[]", "c[]", "d:", "e[]+")
             ->parse(["fart", "-a", "-c", "x", "-cy", "-d=a", "-e", "a", "b", "c"]);
@@ -1059,5 +1284,47 @@ class Unit_Tester {
         $arg = (new Getopt)->short("ab[]c[]d:e[]+")->long("ano")
             ->parse(["fart", "-a", "-c", "x", "-cy", "-d=a", "-e", "a", "b", "-a", "c"]);
         xassert_eqq(json_encode($arg), '{"a":false,"c":["x","y"],"d":"a","e":["a","b"],"_":["c"]}');
+
+        $arg = (new Getopt)->short("ab[]c[]d:e[]+")->long("ano")
+            ->parse(["fart", "-a", "-c", "x", "-cy", "d=a", "-e", "a", "b", "-a", "c"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"c":["x","y"],"_":["d=a","-e","a","b","-a","c"]}');
+
+        $arg = (new Getopt)->short("ab[]c[]d:e[]+")->long("ano")->interleave(true)
+            ->parse(["fart", "-a", "-c", "x", "-cy", "d=a", "-e", "a", "b", "-a", "c"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"c":["x","y"],"e":["a","b"],"_":["d=a","c"]}');
+
+        $arg = (new Getopt)->short("ab[]c[]d:e[]+")->long("ano")->interleave(true)
+            ->parse(["fart", "-a", "--", "-c", "x", "-cy", "d=a", "-e", "a", "b", "-a", "c"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"_":["-c","x","-cy","d=a","-e","a","b","-a","c"]}');
+
+        $arg = self::getopt_parse((new Getopt)->short("ab[]c[]d:e[]+")->long("ano")->interleave(true),
+            ["fart", "-a", "--", "-c", "x", "-cy", "d=a", "-e", "a", "b", "-a", "c"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"_":["-c","x","-cy","d=a","-e","a","b","-a","c"]}');
+
+        $arg = self::getopt_parse((new Getopt)->short("ab[]c[]d:e[]+")->long("ano")->interleave(true),
+            ["fart", "-a=xxxx", "--", "-c", "x", "-cy", "d=a", "-e", "a", "b", "-a", "c"]);
+        xassert_eqq(json_encode($arg), '"`-a` takes no argument"');
+
+        $arg = self::getopt_parse((new Getopt)->short("ab[]c[]d:e[]+")->long("ano")->interleave(true),
+            ["fart", "-axxxx", "--", "-c", "x", "-cy", "d=a", "-e", "a", "b", "-a", "c"]);
+        xassert_eqq(json_encode($arg), '"Unknown option `-x`"');
+    }
+
+    function test_friendly_boolean() {
+        xassert_eqq(friendly_boolean(""), false);
+        xassert_eqq(friendly_boolean("0"), false);
+        xassert_eqq(friendly_boolean("1"), true);
+        xassert_eqq(friendly_boolean("!#($!"), null);
+    }
+
+    function test_merge_whitespace() {
+        xassert_eqq(Text::merge_whitespace("a", "b"), "ab");
+        xassert_eqq(Text::merge_whitespace("a ", "b"), "a b");
+        xassert_eqq(Text::merge_whitespace("a  ", " b"), "a  b");
+        xassert_eqq(Text::merge_whitespace("a\n", "b"), "a\nb");
+        xassert_eqq(Text::merge_whitespace("a\n", "   b"), "a\n   b");
+        xassert_eqq(Text::merge_whitespace("a\n\n", "\nb"), "a\n\nb");
+        xassert_eqq(Text::merge_whitespace("a\n", "\n\nb"), "a\n\nb");
+        xassert_eqq(Text::merge_whitespace("a\n", "\n   b"), "a\n   b");
     }
 }

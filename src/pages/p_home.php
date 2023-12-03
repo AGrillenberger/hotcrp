@@ -238,10 +238,13 @@ class Home_Page {
             PaperSearch::limit_selector($this->conf, $limits, $limits[0]),
             Ht::submit("Search"),
             "</div></form></div>\n";
-        echo '<div class="homegrp d-table" id="homelist">',
-            Ht::form($this->conf->hoturl("search?q=&t=all"), ["method" => "get", "class" => "form-basic-search"]),
-            Ht::submit("Overview - all papers"),
-            "</div></form></div>\n";
+        echo '<div class="homegrp d-table" id="homelist">';
+        foreach($user->conf->submission_round_list() as $sr) {
+            if($sr->unnamed == "1")
+                continue;
+            echo '<a class="btn" href="search?q=%23' . htmlentities($sr->tag) . '&t=act">Overview - all #' . $sr->tag . ' submissions</a>&nbsp;';
+        }
+        echo "</div></form></div>\n";
     }
 
     /** @return list<Score_ReviewField> */
@@ -424,7 +427,7 @@ class Home_Page {
             $sep = $xsep;
         }
         if ($user->isPC && $conf->timePCReviewPreferences()) {
-            echo $sep, '<a href="', $conf->hoturl("reviewprefs"), '">Review preferences</a>';
+            echo $sep, '<mark style="padding: 5px;"><a href="', $conf->hoturl("reviewprefs"), '">Review preferences</a></mark>';
             $sep = $xsep;
         }
         if ($conf->setting("rev_tokens")) {
@@ -539,6 +542,8 @@ class Home_Page {
             $dlt = "<em class=\"deadline\">{$sr->title1}{$dltype} deadline: {$dlspan}</em>";
         }
         if ($user->has_email()) {
+            if($sr->unnamed && !($conf->settings["sub_allowuntagged"] ?? null))
+                return;
             $url = $conf->hoturl("paper", [
                 "p" => "new", "sclass" => $sr->unnamed ? null : $sr->tag
             ]);

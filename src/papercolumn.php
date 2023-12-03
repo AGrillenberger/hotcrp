@@ -173,7 +173,11 @@ class Id_PaperColumn extends PaperColumn {
     }
     function content(PaperList $pl, PaperInfo $row) {
         $href = $pl->_paperLink($row);
-        return "<a href=\"{$href}\" class=\"pnum taghl\">#{$row->paperId}</a>";
+        if(($row->conf->settings["conflict_completelyhide"] ?? null) && ($pl->user->privChair != 1) && ($row->conflictType > 0)) {
+            return "#{$row->paperId}";
+        } else {
+            return "<a href=\"{$href}\" class=\"pnum taghl\">#{$row->paperId}</a>";
+        }
     }
     function text(PaperList $pl, PaperInfo $row) {
         return (string) $row->paperId;
@@ -219,6 +223,8 @@ class Selector_PaperColumn extends PaperColumn {
 class Title_PaperColumn extends PaperColumn {
     private $has_decoration = false;
     private $highlight = false;
+    private $contact = null;
+    private $not_me = null;
     function __construct(Conf $conf, $cj) {
         parent::__construct($conf, $cj);
     }
@@ -231,6 +237,36 @@ class Title_PaperColumn extends PaperColumn {
         $this->highlight = $pl->search->field_highlighter("ti");
         return true;
     }
+    const F_CONFLICT = 1;
+    const F_LEAD = 2;
+    const F_SHEPHERD = 4;
+    /** @return array{?PaperListReviewAnalysis,int} */
+    private function analysis(PaperList $pl, PaperInfo $row) {
+        $rrow = $row->review_by_user($this->contact);
+        if ($rrow && (!$this->not_me || $pl->user->can_view_review_identity($row, $rrow))) {
+            $ranal = $pl->make_review_analysis($rrow, $row);
+        } else {
+            $ranal = null;
+        }
+        if ($ranal && $ranal->rrow->reviewStatus < ReviewInfo::RS_DELIVERED) {
+            $pl->mark_has("need_review");
+        }
+        $flags = 0;
+        if ($row->has_conflict($this->contact)
+            && !($row->has_author($this->contact))
+            && (!$this->not_me || $pl->user->can_view_conflicts($row))) {
+            $flags |= self::F_CONFLICT;
+        }
+        if ($row->leadContactId === $this->contact->contactXid
+            && (!$this->not_me || $pl->user->can_view_lead($row))) {
+            $flags |= self::F_LEAD;
+        }
+        if ($row->shepherdContactId === $this->contact->contactXid
+            && (!$this->not_me || $pl->user->can_view_shepherd($row))) {
+            $flags |= self::F_SHEPHERD;
+        }
+        return [$ranal, $flags];
+    }
     function compare(PaperInfo $a, PaperInfo $b, PaperList $pl) {
         $collator = $a->conf->collator();
         return $collator->compare($a->title, $b->title);
@@ -239,7 +275,17 @@ class Title_PaperColumn extends PaperColumn {
         $t = '<a href="' . $pl->_paperLink($row) . '" class="ptitle taghl';
 
         if ($row->title !== "") {
-            $highlight_text = Text::highlight($row->title, $this->highlight, $highlight_count);
+            if(($row->conf->settings["conflict_completelyhide"] ?? null) && ($flags & self::F_CONFLICT)) {
+                if($this->contact->privChair != 1) {
+                    $highlight_text = "[CONFLICT]";
+                }
+                else {
+                    $highlight_text = Text::highlight($row->title, $this->highlight, $highlight_count) . " [conflict overwritten as chair]";
+                }
+            } else {
+                $highlight_text = Text::highlight($row->title, $this->highlight, $highlight_count);
+            }
+            $highlight_count = 0;
         } else {
             $highlight_text = "[No title]";
             $highlight_count = 0;
@@ -251,8 +297,14 @@ class Title_PaperColumn extends PaperColumn {
                 . '" data-title="' . htmlspecialchars($row->title);
         }
 
-        $t .= '">' . $highlight_text . '</a>'
-            . $pl->_contentDownload($row);
+        $t .= '">' . $highlight_text . '</a>';
+
+        if($highlight_text === "[CONFLICT]")
+            $t = "[CONFLICT]";
+
+        if(!(($row->conf->settings["conflict_completelyhide"] ?? null) && $flags & self::F_CONFLICT && $this->contact->privChair != 1)) {
+            $t .= $pl->_contentDownload($row);
+        }
 
         if ($this->has_decoration && (string) $row->paperTags !== "") {
             if ($pl->row_tags_overridable !== ""

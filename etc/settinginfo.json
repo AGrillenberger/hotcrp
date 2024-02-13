@@ -541,6 +541,13 @@
         "values": [0, 1], "default_value": 0
     },
     {
+        "name": "review_identity_visibility_external", "storage": "viewrevid_ext",
+        "title": "External reviewers can view reviewer identities",
+        "type": "radio",
+        "values": [-1, 0, 1], "default_value": 0,
+        "json_values": ["never", "after_review", "always"]
+    },
+    {
         "name": "review_identity_visibility_pc", "storage": "pc_seeblindrev",
         "title": "PC can see anonymous reviewers’ identities",
         "type": "radio",

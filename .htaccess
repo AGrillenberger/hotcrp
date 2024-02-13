@@ -2,14 +2,16 @@
 
 # These directives limit how large a paper can be uploaded.
 # post_max_size should be >= upload_max_filesize.
-#php_value upload_max_filesize 15M
-#php_value post_max_size 20M
+php_value upload_max_filesize 102374182
+php_value post_max_size 102374182
 
 # Some pages involve a lot of post variables.
 #php_value max_input_vars 4096
 
 # A large memory_limit helps when sending very large zipped files.
-php_value memory_limit 128M
+php_value memory_limit 256M
+
+php_value error_reporting E_ERROR
 
 # Default to UTF-8 (most scripts will override this with <meta>).
 AddDefaultCharset UTF-8

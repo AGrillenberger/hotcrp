@@ -50,3 +50,4 @@ RewriteRule ^[^/]*(/.*)$ %1.php$1 [L,NE]
 # AuthName "HotCRP"
 # AuthUserFile FILENAME
 # Require valid-user
+

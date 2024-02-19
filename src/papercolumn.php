@@ -312,7 +312,7 @@ class Title_PaperColumn extends PaperColumn {
             $klass_extra = "";
         }
 
-        $t .= '">' . $highlight_text . '</a>';
+        $t .= $highlight_text . '</a>';
 
         if($highlight_text === "[CONFLICT]")
             $t = "[CONFLICT]";

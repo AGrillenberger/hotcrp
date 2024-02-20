@@ -59,17 +59,24 @@ class Imprint_Page {
         echo <<<ENDHTML
             <h2>Current WiPSCE chair / person responsible for content</h2>
             <p>
-              <bold>Dr Sue Sentance</bold><br />
-              Director of the Raspberry Pi Computing Education Research Centre (P/T)<br />
-              Department of Computer Science and Technology<br />
-              University of Cambridge<br />
-              15 JJ Thomson Avenue<br />
-              Cambridge, CB3 0FD, UK
-            </p>
-            <p>
-              Office phone: (01223) 3-34613<br />
-              Email: sue.sentance@cst.cam.ac.uk
-            </p>
+<bold>Prof. Dr. Tilman Michaeli</bold>
+<br>
+" Computing Education Research Group Munich"
+<br>
+" School of Social Sciences and Technology"
+<br>
+" Technical University of Munich"
+<br>
+" Arcisstraße 21"
+<br>
+" 80333 Munich, Germany "
+</p>
+<p>
+" Office phone: "
+<a href="tel:+49 89 289 - 24252">+49 89 289 - 24252</a>
+<br>
+" Email: tilman.michaeli@tum.de "
+</p>
             ENDHTML;
         echo "</div></main>\n";
     }

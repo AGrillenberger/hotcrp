@@ -59,24 +59,24 @@ class Imprint_Page {
         echo <<<ENDHTML
             <h2>Current WiPSCE chair / person responsible for content</h2>
             <p>
-<bold>Prof. Dr. Tilman Michaeli</bold>
-<br>
-" Computing Education Research Group Munich"
-<br>
-" School of Social Sciences and Technology"
-<br>
-" Technical University of Munich"
-<br>
-" Arcisstraße 21"
-<br>
-" 80333 Munich, Germany "
-</p>
-<p>
-" Office phone: "
-<a href="tel:+49 89 289 - 24252">+49 89 289 - 24252</a>
-<br>
-" Email: tilman.michaeli@tum.de "
-</p>
+                <bold>Prof. Dr. Tilman Michaeli</bold>
+                <br>
+                Computing Education Research Group Munich
+                <br>
+                School of Social Sciences and Technology
+                <br>
+                Technical University of Munich
+                <br>
+                Arcisstraße 21
+                <br>
+                80333 Munich, Germany
+            </p>
+            <p>
+                Office phone:
+                <a href="tel:+49 89 289 - 24252">+49 89 289 - 24252</a>
+                <br>
+                Email: <a href="mailto:tilman.michaelibtum.de">tilman.michaeli@tum.de</a>
+            </p>
             ENDHTML;
         echo "</div></main>\n";
     }

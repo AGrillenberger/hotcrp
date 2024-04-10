@@ -171,7 +171,8 @@ class Id_PaperColumn extends PaperColumn {
     }
     function content(PaperList $pl, PaperInfo $row) {
         $href = $pl->_paperLink($row);
-        if(($row->conf->settings["conflict_completelyhide"] ?? null) && ($pl->user->privChair != 1) && ($row->conflictType > 0)) {
+        $hasConflict = ($pl->user->privChair != 1) && ($row->conflictType > 0) && !($row->has_author($pl->user));
+        if(($row->conf->settings["conflict_completelyhide"] ?? null) && $hasConflict) {
             return "#{$row->paperId}";
         } else {
             return "<a href=\"{$href}\" class=\"pnum taghl\">#{$row->paperId}</a>";

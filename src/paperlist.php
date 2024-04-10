@@ -1586,7 +1586,7 @@ class PaperList {
             return "";
         }
 
-        // main columns
+        // main columns       
         $tm = [];
         foreach ($this->_vcolumns as $fdef) {
             if ($fdef->as_row || !$fdef->has_content) {

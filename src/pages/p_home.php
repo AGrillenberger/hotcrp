@@ -426,7 +426,7 @@ class Home_Page {
             $sep = $xsep;
         }
         if ($user->isPC && $conf->timePCReviewPreferences()) {
-            echo $sep, '<mark style="padding: 5px;"><a href="', $conf->hoturl("reviewprefs"), '">Review preferences</a></mark>';
+            echo $sep, '<mark style="padding: 5px;"><a href="reviewprefs.php?q=%23paper+&t=editpref">Review preferences</a></mark>';
             $sep = $xsep;
         }
         if ($conf->setting("rev_tokens")) {

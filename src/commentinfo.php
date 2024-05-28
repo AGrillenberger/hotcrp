@@ -324,8 +324,7 @@ class CommentInfo {
             $this->_commenter = $this->conf->user_by_id($this->contactId, USER_SLICE)
                 ?? Contact::make_deleted($this->conf, $this->contactId);
         }
-        return ""; // temporary fix
-        // return $this->_commenter;
+        return $this->_commenter;
     }
 
 

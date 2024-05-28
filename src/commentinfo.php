@@ -739,7 +739,7 @@ class CommentInfo {
             . $a . ' class="ptitle">'
             . htmlspecialchars(UnicodeHelper::utf8_abbreviate($this->prow->title, 80))
             . "</a>";
-        $idable = $contact->can_view_comment_identity($this->prow, $this);
+        $idable = false; // temp. fix $contact->can_view_comment_identity($this->prow, $this);
         if ($idable || $contact->can_view_comment_time($this->prow, $this)) {
             $time = $this->conf->unparse_time($this->timeModified);
         } else {

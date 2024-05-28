@@ -324,7 +324,8 @@ class CommentInfo {
             $this->_commenter = $this->conf->user_by_id($this->contactId, USER_SLICE)
                 ?? Contact::make_deleted($this->conf, $this->contactId);
         }
-        return $this->_commenter;
+        return ""; // temporary fix
+        // return $this->_commenter;
     }
 
 
@@ -683,7 +684,7 @@ class CommentInfo {
             $x = "Comment" . ($ordinal ? " @{$ordinal}" : "");
         }
         $p = $this->unparse_commenter_pseudonym($contact);
-        if ($contact->can_view_comment_identity($this->prow, $this)) {
+        if (false && $contact->can_view_comment_identity($this->prow, $this)) { // temporary fix (false &&)
             $n = Text::nameo($this->commenter(), NAME_EB);
             $np = $this->commenter_may_be_pseudonymous();
             if ($p && $np) {

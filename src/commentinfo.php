@@ -635,6 +635,9 @@ class CommentInfo {
             if (!$idable) {
                 $cj->author_hidden = true;
             }
+            // temporary fix
+            $idable = false;
+            $cj->author_hidden = true;
         }
         if (($p = $this->unparse_commenter_pseudonym($viewer))) {
             $cj->author_pseudonym = $p;

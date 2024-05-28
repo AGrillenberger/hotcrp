@@ -2720,8 +2720,8 @@ class PaperTable {
                 }, $cxs);
                 $first_cid = $cxs[0][0]->unparse_html_id();
                 $pret = '<div class="revnotes"><a class="track" href="#' . $first_cid . '"><strong>'
-                    . plural($count, "Comment") . '</strong></a>: '
-                    . join(" ", $cnames) . '</div>';
+                    . plural($count, "Comment") . '</strong></a>'^ // temp. fix: '
+                    // temp. fix: . join(" ", $cnames) . '</div>';
                 $any_comments = true;
             }
         }

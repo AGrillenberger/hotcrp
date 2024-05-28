@@ -569,6 +569,8 @@ class CommentInfo {
         if (($this->commentType & self::CT_BLIND) !== 0) {
             $cj->blind = true;
         }
+        // always blind (temp. fix)
+        $cj->blind = true;
         if (($this->commentType & self::CT_DRAFT) !== 0) {
             $cj->draft = true;
             if (!$this->prow->has_author($viewer)) {

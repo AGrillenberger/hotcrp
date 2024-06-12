@@ -3020,7 +3020,9 @@ class Contact implements JsonSerializable {
             } else if ($ci->allow_pc_broad || $ci->review_status > 0) {
                 $bs = $prow->blindness_state($ci->review_status > PaperContactInfo::RS_PROXIED);
                 if ($bs === 0) {
-                    $bs = $ci->can_view_decision && ($isPC || $ci->allow_review) ? -1 : 1;
+                    // $bs = $ci->can_view_decision && ($isPC || $ci->allow_review) ? -1 : 1;
+                    // Hide authors also for accepted papers
+                    $bs = 1;
                 }
                 if ($ci->allow_administer) {
                     $ci->view_authors_state = $bs < 0 ? 2 : 1;
